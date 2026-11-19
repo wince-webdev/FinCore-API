@@ -36,3 +36,7 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Crash JVM (hs_err/replay) — jamais versionnes ###
+hs_err_pid*.log
+replay_pid*.log

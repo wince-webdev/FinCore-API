@@ -55,6 +55,13 @@ spring:
     # SKIP_NULL en Symfony Serializer)
     default-property-inclusion: non_null
 
+  mvc:
+    # Les erreurs standard de Spring MVC (404, 405, 400…) deviennent des
+    # corps RFC 9457 automatiquement — GlobalExceptionHandler complète
+    # le tableau avec les codes métier.
+    problemdetails:
+      enabled: true
+
   # --- Pour l'instant, pas de sécurité OAuth2 configurée (phase 2) ---
 
 # =====================================================================
@@ -72,9 +79,14 @@ management:
       show-details: never # ne jamais exposer les détails en prod
 
 # =====================================================================
-# Profil DEV — logs lisibles, Swagger ouvert (§12.3)
-# =================================================================---
+# Logs — communs à tous les profils
+# =====================================================================
 logging:
+  pattern:
+    # correlationId injecté dans le MDC par CorrelationIdFilter : chaque
+    # ligne de log porte l'identifiant renvoyé au client dans les erreurs
+    # (« traceId ») → une plainte client = une recherche dans les logs.
+    correlation: "%X{correlationId:-} "
   level:
     root: INFO
     com.wince.fincore: DEBUG
@@ -117,6 +129,13 @@ spring:
   config:
     activate:
       on-profile: prod
+
+# Swagger désactivé en production (§12.3) : le contrat n'est pas public.
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
 
 management:
   endpoint:
