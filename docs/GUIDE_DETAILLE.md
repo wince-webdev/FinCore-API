@@ -394,3 +394,284 @@ l'environnement. `netstat` identifie toujours les conflits.
    `application.yml` et observez la diffÃ©rence.
 
 ---
+
+---
+
+# PHASE 1 — Socle transverse : Money, erreurs RFC 9457, correlationId, Swagger
+
+## 1.1 Objectif de la phase
+
+1. Créer le **domaine monétaire** (`Money`, `Currency`) : impossible d'additionner deux devises différentes.
+2. Normaliser **toutes** les erreurs au format RFC 9457 (`application/problem+json`) avec un code métier stable.
+3. Corréler chaque requête : même identifiant dans la réponse, les logs et les erreurs (`X-Correlation-Id` / `traceId`).
+4. Servir **Swagger UI** en dev ; tout le reste reste refusé sans jeton (401).
+5. Horloge injectable (`Clock`) — jamais `Instant.now()` dans les services.
+
+## 1.2 Notions à comprendre
+
+### Value object (`record`) ˜ classe immuable Symfony
+`Money` est un **record** Java : les champs sont `final`, le constructeur valide,
+`equals`/`hashCode` sont générés. C'est l'équivalent d'un value object
+`readonly` en PHP 8.2 — mais avec **zéro boilerplate**.
+
+### `BigDecimal` vs `float` ˜ `bcmath` vs `float` en PHP
+Un `double` ne peut pas représenter exactement `0.1` : les banques refusent.
+`BigDecimal` est un nombre décimal exact (comme `bcmath`), et l'**arrondi
+HALF_EVEN** (« bancaire ») évite la dérive systématique : on arrondit vers le
+nombre **pair** (2,5 ? 2 ; 3,5 ? 4), donc sur des millions d'opérations la
+somme des arrondis reste nulle.
+
+### `@RestControllerAdvice` ˜ listener `kernel.exception` Symfony
+Un seul endroit qui transforme **toutes** les exceptions en réponse HTTP.
+L'équivalent exact est un listener sur l'événement `kernel.exception` qui
+retourne un `JsonErrorResponse`.
+
+### RFC 9457 = standard « problem+json »
+```json
+{ "type": "…/errors/insufficient-funds", "title": "Solde insuffisant",
+  "status": 422, "detail": "…", "instance": "/api/v1/…",
+  "code": "INSUFFICIENT_FUNDS", "traceId": "…", "timestamp": "…" }
+```
+Le champ **`code`** est la clé : stable, en majuscules, sur lequel le front
+branche sa logique. Le `detail` (français) peut changer sans casser le client.
+Équivalent Symfony : les formats d'erreur normalisés du bundle API Platform.
+
+### `OncePerRequestFilter` ˜ middleware Laravel/Symfony
+Un filtre exécuté **une seule fois** par requête, avant le contrôleur.
+Ici il pose le `correlationId` dans le **MDC** (Map Diagnostic Context de
+SLF4J) : c'est un « tableau magique » par thread, vidé en `finally`.
+
+### `MDC` ˜ le contexte du logger (monolog processor)
+En Symfony on ajoute un *processor* Monolog pour injecter un UUID dans chaque
+ligne. Ici `MDC.put("correlationId", …)` fait pareil : la clé apparaît
+automatiquement dans le pattern de log configuré par `logging.pattern.correlation`.
+
+### `Clock` ˜ injecter une horloge plutôt que `time()`
+Règle d'or testable : on n'appelle jamais `Instant.now()` dans un service —
+on **injecte** un `Clock`. En test, on fournit `Clock.fixed(…)` : les
+scénarios « cumul du jour » deviennent déterministes. Fuseau bancaire :
+`Africa/Porto-Novo` (UTC+1, siège BCEAO) — le stockage reste en UTC.
+
+### Spring Security par défaut ˜ `access_control` tout à `IS_AUTHENTICATED_FULLY`
+Sans configuration, Spring Security **verrouille tout** (c'est pourquoi
+`/api-docs` répondait 401 en phase 0). `SecurityConfig` ouvre
+ponctuellement `health` + `swagger`, et le reste exige un jeton ? **401**
+(et non 403 : 403 dirait « vous êtes connecté mais sans droits », alors
+qu'ici il n'y a même pas de jeton — CA-AUTH-04).
+
+## 1.3 Commandes exécutées
+
+### A. Compilation rapide (aller-retour)
+```powershell
+.\mvnw.cmd -q -DskipTests compile
+```
+| | |
+|---|---|
+| **Ce qu'elle fait** | Compile uniquement les sources **sans** exécuter les tests |
+| **Options** | `-q` = quiet (n'affiche que les erreurs) ; `-DskipTests` = saute les tests |
+| **Résultat attendu** | Aucune sortie = succès |
+| **Quand l'utiliser** | Vérifier qu'une erreur de syntaxe/typage est corrigée avant de lancer les tests complets |
+
+### B. Tests ciblés
+```powershell
+.\mvnw.cmd test "-Dtest=MoneyTest,CurrencyTest,CorrelationIdFilterTest,GlobalExceptionHandlerTest" "-Dsurefire.failIfNoSpecifiedTests=false"
+```
+| | |
+|---|---|
+| **Ce qu'elle fait** | N'exécute **que** les classes nommées (surefire = plugin de tests Maven) |
+| **Options** | `-Dtest=` liste les classes (séparées par `,`) ; `-Dsurefire.failIfNoSpecifiedTests=false` évite l'échec si un nom ne matche rien |
+| **Piège PowerShell** | Les `-D` contenant des points doivent être **entre guillemets** : sans quotes, PowerShell coupe au `.` et Maven voit « phase inconnue » |
+| **Résultat attendu** | `Tests run: 29, Failures: 0` |
+
+### C. Build complet
+```powershell
+.\mvnw.cmd verify
+```
+| | |
+|---|---|
+| **Ce qu'elle fait** | Cycle complet : compile ? tests ? package (JAR) ; inclut `FinCoreApplicationTests` (Testcontainers + contexte réel) |
+| **Résultat attendu** | `BUILD SUCCESS` / `Tests run: 30, Failures: 0, Errors: 0` |
+| **Erreur fréquente** | `forked VM terminated` + `malloc failed` = **mémoire épuisée** ? fermer l'app dev (`Stop-Process`) avant de relancer les tests |
+
+### D. Redémarrage de l'app + vérifications
+```powershell
+# Redémarrage (l'app lancée en phase 0 doit être arrêtée d'abord)
+Start-Process .\mvnw.cmd -ArgumentList "spring-boot:run" -WindowStyle Hidden
+
+# Swagger + contrat ouverts en dev
+curl.exe -sS -o NUL -w "%{http_code}" http://localhost:8080/swagger-ui.html   # ? 200
+curl.exe -sS -o NUL -w "%{http_code}" http://localhost:8080/api-docs          # ? 200
+
+# 401 + corps RFC 9457 + correlationId propagé (CA-AUTH-04)
+curl.exe -sS -H "X-Correlation-Id: trace-essai-1" http://localhost:8080/no-such-path
+# ? {"type":"…/errors/unauthenticated","code":"UNAUTHENTICATED","traceId":"trace-essai-1",…}
+
+# Le même identifiant ressort en en-tête de réponse
+curl.exe -sS -D - -o NUL http://localhost:8080/actuator/health | findstr X-Correlation-Id
+```
+
+## 1.4 Fichiers créés ou modifiés
+
+| Fichier | Rôle |
+|---|---|
+| `shared/domain/Currency.java` | Enum XOF(0)/EUR(2)/USD(2) + échelle autorisée |
+| `shared/domain/Money.java` | Value object monétaire : arrondi HALF_EVEN, `parse()` rejette l'échelle excessive |
+| `shared/domain/ErrorCode.java` | Table exhaustive des codes métier ? statut HTTP + URI type |
+| `shared/domain/FinCoreException.java` | Exception métier transportant le `ErrorCode` + détails structurés |
+| `shared/api/GlobalExceptionHandler.java` | `@RestControllerAdvice` : tout ? ProblemDetail RFC 9457 (traceId, timestamp via Clock) |
+| `shared/infrastructure/CorrelationIdFilter.java` | Lit/génère `X-Correlation-Id`, MDC, nettoyage en `finally` |
+| `shared/infrastructure/ClockConfig.java` | Bean `Clock` en `Africa/Porto-Novo` |
+| `shared/infrastructure/OpenApiConfig.java` | Document OpenAPI : titre, contact, schéma JWT `bearerAuth` |
+| `shared/infrastructure/SecurityConfig.java` | Health/Swagger publics ; sinon 401/403 en `problem+json` |
+| `application.yml` | `logging.pattern.correlation`, `spring.mvc.problemdetails`, springdoc off en prod |
+| `src/test/…/MoneyTest.java` | 15 tests : arrondis, signes, cross-currency, `parse()` |
+| `src/test/…/CurrencyTest.java` | 3 tests : échelles et devises |
+| `src/test/…/CorrelationIdFilterTest.java` | 4 tests : génération, reprise, nettoyage du MDC |
+| `src/test/…/GlobalExceptionHandlerTest.java` | 7 tests : statuts, codes, champs RFC 9457, masquage des 500 |
+
+## 1.5 Code clé commenté
+
+### `Money` — le constructeur normalise tout
+```java
+public Money(BigDecimal amount, Currency currency) {
+    Objects.requireNonNull(amount, "…");
+    Objects.requireNonNull(currency, "…");
+    // On arrondit ICI : le domaine ne stocke jamais une échelle « sale ».
+    amount = amount.setScale(currency.scale(), RoundingMode.HALF_EVEN);
+}
+```
+Le constructeur compact d'un `record` peut **réaffecter** les paramètres —
+c'est le point d'entrée unique où tous les invariants sont garantis.
+
+### `parse()` — rejet explicite pour la saisie utilisateur
+```java
+if (value.scale() > currency.scale()) {
+    throw new FinCoreException(ErrorCode.INVALID_AMOUNT_SCALE,
+            "La devise XOF autorise au plus 0 décimale(s)…");
+}
+```
+**Distinction cruciale** : `Money.of()` *arrondit* (calculs internes),
+`Money.parse()` *rejette* (saisie API, RG-DEP-03 ? 400). Arrondir silencieusement
+une saisie reviendrait à voler 0,50 XOF au client sans le prévenir.
+
+### `CorrelationIdFilter` — le `finally` obligatoire
+```java
+MDC.put(MDC_KEY, correlationId);
+response.setHeader(HEADER, correlationId);
+try {
+    filterChain.doFilter(request, response);
+} finally {
+    MDC.remove(MDC_KEY);   // TOUJOURS : sinon le thread suivant hérite de l'ID
+}
+```
+Les threads Tomcat sont **réutilisés** : sans `finally`, la requête 42
+porterait le correlationId de la requête 41 dans ses logs — erreur de
+diagnostic très dure à trouver.
+
+### `application.yml` — le pattern de log corrélé
+```yaml
+logging:
+  pattern:
+    correlation: "%X{correlationId:-} "
+    #             ^^^^^^^^^^^^^^^^^^ variable MDC, "-"" = valeur si absente
+```
+Chaque ligne de log commence par le même `traceId` que celui renvoyé au
+client dans l'erreur : une plainte = une `grep`.
+
+## 1.6 Comment vérifier
+
+```powershell
+.\mvnw.cmd verify                                  # ? 30 tests, BUILD SUCCESS
+curl.exe -sS -o NUL -w "%{http_code}`n" http://localhost:8080/swagger-ui.html   # 200
+curl.exe -sS -H "X-Correlation-Id: abc" http://localhost:8080/api/v1/x | jq .code # "UNAUTHENTICATED"
+```
+
+## 1.7 Pièges rencontrés
+
+### P1-1 — `swagger-ui` / `api-docs` ? 401 (avant SecurityConfig)
+- **Cause** : Spring Security (démarré au P0-0) verrouille **tout** par défaut.
+- **Correction** : `SecurityConfig` avec `permitAll` sur `health` + `swagger` + `api-docs`, `anyRequest().authenticated()` pour le reste.
+- **Leçon** : en Spring Security, on n'ouvre pas, on **ferme** — le défaut (verrouillé) est le bon.
+
+### P1-2 — Sans jeton ? 403 « Forbidden » au lieu de 401
+- **Cause** : sans `AuthenticationEntryPoint` explicite, Spring renvoie 403 par défaut — alors qu'aucun jeton n'a même été présenté.
+- **Correction** : `.exceptionHandling()` avec un `AuthenticationEntryPoint` ? 401 `UNAUTHENTICATED` + corps `problem+json` (CA-AUTH-04).
+- **Leçon** : 401 = « prouvez qui vous êtes » ; 403 = « vous êtes identifié mais refusé ». Les confondre fait perdre des heures au front.
+
+### P1-3 — `found duplicate key logging` au démarrage
+- **Erreur exacte** : SnakeYAML refuse deux clés `logging:` dans le **même** document YAML.
+- **Cause** : ajout du `logging.pattern.correlation` dans un nouveau bloc alors que `logging.level` existait déjà avant le `---`.
+- **Correction** : fusionner dans **un seul** bloc `logging` par document (les séparateurs `---` délimitent des documents distincts, chacun a le sien).
+- **Leçon** : un `---` = un fichier YAML à part entière ; les clés ne se fusionnent pas.
+
+### P1-4 — Tests de filtrage : mock Mockito = headers fantômes
+- **Symptôme** : `response.getHeader(...)` renvoie `null` alors que le filtre a bien appelé `setHeader` — le test échoue à tort.
+- **Cause** : un mock généré par Mockito n'a **aucune logique métier** : `setHeader` et `getHeader` sont indépendants (le mock ne stocke rien).
+- **Correction** : utiliser `MockHttpServletRequest` / `MockHttpServletResponse` de Spring Test, qui reproduisent le vrai comportement du conteneur servlet.
+- **Leçon** : mock = on simule les *interactions*, pas le *comportement*. Pour le comportement, prendre le mock « réel » de la framework.
+
+### P1-5 — `malloc failed` dans le fork Maven (tests)
+- **Erreur exacte** : `There is insufficient memory for the Java Runtime Environment to continue` dans `*.dumpstream`.
+- **Cause** : 7,8 Go de RAM, l'app dev + le JVM de tests + IDE tournent en même temps ? le fork surefire ne peut pas s'allouer ~20 Mo.
+- **Correction** : `Stop-Process` sur l'app Spring Boot avant `mvnw verify`, puis relancer.
+- **Leçon** : les tests Spring Boot (contexte complet + Testcontainers) sont gourmands — un seul build à la fois sur une machine de 8 Go.
+
+### P1-6 — HALF_EVEN : le test attendait le mauvais résultat
+- **Symptôme** : `1250.50 ? 1251` attendu, `1250` obtenu.
+- **Cause** : l'arrondi bancaire va au nombre **pair** : 1250 est pair ? `1250.50` **descend** à 1250 (et `1251.50` **monte** à 1252).
+- **Leçon** : HALF_EVEN n'arrondit pas « vers le haut », il élimine la dérive biaisée sur des millions d'écritures.
+
+## 1.8 Questions d'entretien (Phase 1)
+
+**Q1. Pourquoi un `record` Java pour `Money` et pas une classe ?**
+Le `record` génère automatiquement constructeur, accesseurs, `equals`,
+`hashCode`, `toString` — et interdit les champs non-`final`. Résultat : une
+classe valeur **sérialisable, comparable, immuable** en 10 lignes, au lieu de
+~80 en classe standard. C'est l'équivalent d'un value object `readonly` PHP.
+
+**Q2. Différence entre `Money.of()` et `Money.parse()` ?**
+`of()` est l'entrée **interne** : il arrondit (HALF_EVEN) car les calculs
+peuvent produire des échelles sales (taux de frais). `parse()` est l'entrée
+**utilisateur** : il **rejette** une échelle supérieure à la devise
+(`100.50` en XOF ? 400 `INVALID_AMOUNT_SCALE`) — on n'arrondit jamais une
+saisie sans prévenir le client.
+
+**Q3. Pourquoi `traceId` dans le corps d'erreur ?**
+Parce que c'est le **seul** lien fiable entre une plainte client et les logs
+serveur. Le client nous donne son `traceId`, on le `grep` dans ELK/Loki, on
+trouve la ligne exacte — sans lui, il faudrait reconstituer la requête à
+partir d'une heure et d'une URL. Il vient du MDC : même valeur que l'en-tête
+`X-Correlation-Id` et que le pattern de log.
+
+**Q4. Pourquoi 401 et non 403 sur une API sans jeton ?**
+401 (`Unauthorized`) = « je ne sais pas qui vous êtes, prouvez-le » : le
+client doit renvoyer son JWT. 403 (`Forbidden`) = « je sais qui vous êtes,
+mais vous n'y avez pas le droit » : renvoyer le JWT ne changera rien. Une
+erreur de classification fait perdre des heures au front (boucle de retry
+inutile ou affichage « session expirée » à tort).
+
+**Q5. Pourquoi un `Clock` injecté au lieu de `Instant.now()` ?**
+Reproductibilité. Les règles « cumul du jour » (CA-LIM-03) dépendent du
+temps : avec `Instant.now()`, un test qui échoue à minuit ou en CI décale
+échoue aléatoirement. Avec `Clock.fixed(2026-03-15T10:30Z, …)`, le test est
+figé et déterministe. C'est l'équivalent de la « freeze time » de Clockify
+ou du `Clock` de Symfony (RFC de PHP).
+
+**Q6. Où s'arrête `GlobalExceptionHandler` — que voit le client sur un 500 ?**
+Jamais la stack trace : un message générique (« Une erreur interne est
+survenue… ») + le `traceId`. Le détail réel part en `log.error` côté serveur.
+Filtrer le message évite les fuites d'information (nom de table, chemin
+disque, requête SQL) — c'est la règle OWASP A05:2021.
+
+## 1.9 Exercice pour le candidat
+
+1. Ajoutez un test qui prouve que `Money.parse("100.00", XOF)` est **accepté**
+   (échelle 2 > 0 ? non — 2 décimales > 0 décimales ? doit être **rejeté**) :
+   vérifiez la frontière exacte, et corrigez le test si votre intuition
+   était fausse.
+2. Faites échouer volontairement un test (`assertThat(true).isFalse()`),
+   lancez `.\mvnw.cmd test`, et localisez le rapport HTML sous
+   `target/surefire-reports/`.
+3. Appelez l'API avec un `X-Correlation-Id` de votre choix, provoquez une
+   erreur, et **retrouvez** ce même identifiant dans la sortie console de
+   l'app : prouvez la corrélation bout-en-bout.
