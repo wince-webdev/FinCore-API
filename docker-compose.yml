@@ -1,0 +1,43 @@
+# FinCore API — orchestration Docker
+# Phase 0 : seule la base PostgreSQL est définie. Le service `app` sera
+# ajouté en phase 12 (Dockerfile multi-étapes), pgadmin restera optionnel.
+#
+# Syntaxe : `docker compose up -d db` pour démarrer uniquement la base.
+
+services:
+  db:
+    image: postgres:17
+    container_name: fincore-db
+    # Les variables sont lues dans .env (voir .env.example) avec repli
+    # sur des valeurs locales pour que `docker compose up` fonctionne
+    # même sans fichier .env.
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-fincore}
+      POSTGRES_USER: ${POSTGRES_USER:-fincore}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fincore_local_dev}
+    ports:
+      # 5433 côté hôte : Laragon occupe déjà 5432 avec son propre
+      # PostgreSQL (localhost résout en 127.0.0.1 → conflit silencieux).
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      # Volume nommé : les données survivent à `docker compose down`
+      # (suppression avec `docker compose down -v` seulement)
+      - fincore-db-data:/var/lib/postgresql/data
+    networks:
+      - fincore-net
+    healthcheck:
+      # pg_isready appartient à l'image postgres : pas besoin d'outils externes
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-fincore} -d $${POSTGRES_DB:-fincore}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  fincore-db-data:
+    name: fincore-db-data
+
+networks:
+  fincore-net:
+    name: fincore-net

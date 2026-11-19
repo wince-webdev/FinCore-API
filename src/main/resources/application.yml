@@ -1,0 +1,129 @@
+# =====================================================================
+# FinCore API — configuration commune à tous les profils
+# Format YAML choisi pour la lisibilité (équivalent d'un config/packages
+# Symfony : une arborescence = un objet de configuration).
+# =====================================================================
+spring:
+  application:
+    name: FinCore
+
+  # Profil actif par défaut : dev. On le surcharge avec
+  # `--spring.profiles.active=prod` ou SPRING_PROFILES_ACTIVE=prod.
+  profiles:
+    default: dev
+
+  # --- Base de données ---
+  # Les valeurs par défaut correspondent au docker-compose.yml local.
+  # En production, tout est surchargé par variables d'environnement.
+  datasource:
+    # Port 5433 : le 5432 est occupé par le PostgreSQL de Laragon sur
+    # cette machine (localhost → 127.0.0.1 → mauvais serveur, rôle
+    # "fincore" introuvable). Voir docs/GUIDE_DETAILLE.md, piège P0-3.
+    url: ${FINCORE_DB_URL:jdbc:postgresql://localhost:5433/fincore}
+    username: ${FINCORE_DB_USERNAME:fincore}
+    password: ${FINCORE_DB_PASSWORD:fincore_local_dev}
+
+  # --- JPA / Hibernate ---
+  jpa:
+    # `validate` : Hibernate ne crée JAMAIS le schéma, il le vérifie
+    # seulement. C'est Flyway qui est le seul propriétaire du schéma
+    # (équivalent strict de `doctrine.schemas` + validate en Symfony).
+    hibernate:
+      ddl-auto: validate
+    # Pas de Open Session In View : on ne veut pas de requête lazy
+    # cachée dans un contrôleur (mauvaise pratique en API REST).
+    open-in-view: false
+    properties:
+      # Ne pas logger les mots de passe ou les données sensibles
+      hibernate.format_sql: false
+
+  # --- Flyway : migrations versionnées (V1__..., V2__...) ---
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # En dev on autorise un baseline pour une base existante ;
+    # en prod, toute divergence = erreur au démarrage.
+    baseline-on-migrate: false
+
+  # --- Jackson (JSON) ---
+  # Piège Boot 4 : Jackson 3 (package tools.jackson) a supprimé
+  # WRITE_DATES_AS_TIMESTAMPS — les dates sont toujours en ISO-8601
+  # par défaut. Configurer `spring.jackson.serialization.*` lèverait
+  # une erreur de liaison d'enum.
+  jackson:
+    # Les champs null sont omis dans les réponses API (équivalent
+    # SKIP_NULL en Symfony Serializer)
+    default-property-inclusion: non_null
+
+  # --- Pour l'instant, pas de sécurité OAuth2 configurée (phase 2) ---
+
+# =====================================================================
+# Actuator — santé et métriques
+# =====================================================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true # liveness / readiness pour Docker HEALTHCHECK
+      show-details: never # ne jamais exposer les détails en prod
+
+# =====================================================================
+# Profil DEV — logs lisibles, Swagger ouvert (§12.3)
+# =================================================================---
+logging:
+  level:
+    root: INFO
+    com.wince.fincore: DEBUG
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+  flyway:
+    baseline-on-migrate: false
+
+# Swagger UI accessible sans authentification en dev
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+# =====================================================================
+# Profil TEST — utilisé par @SpringBootTest (Testcontainers fournit la base)
+# ====================================================================
+---
+spring:
+  config:
+    activate:
+      on-profile: test
+  flyway:
+    enabled: true
+
+logging:
+  level:
+    root: WARN
+    com.wince.fincore: INFO
+
+# =====================================================================
+# Profil PROD — logs compacts, détails de santé masqués (§12.3)
+# ====================================================================
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+management:
+  endpoint:
+    health:
+      show-details: never
+
+logging:
+  level:
+    root: INFO
+    com.wince.fincore: INFO
