@@ -69,13 +69,22 @@ public class CustomerService {
             }
             if (request.kycLevel() != KycLevel.LEVEL_1
                     && (request.idDocType() == null || request.idDocNumber() == null)) {
-                // RG-KYC-02 : passage en LEVEL_2 (doc) ou LEVEL_3 (doc + ADMIN).
+                // RG-KYC-02 : passage en LEVEL_2 (doc) ou LEVEL_3 (doc).
                 throw new FinCoreException(ErrorCode.VALIDATION_FAILED,
                         "Le passage au niveau " + request.kycLevel()
                                 + " requiert un type et un numéro d'identification renseignés.",
                         Map.of("errors", Map.of(
                                 "idDocType", "obligatoire",
                                 "idDocNumber", "obligatoire")));
+            }
+            if (request.kycLevel() == KycLevel.LEVEL_3
+                    && (request.sourceRevenus() == null || request.sourceRevenus().isBlank())) {
+                // RG-KYC-02 : « source de revenus déclarée » — le LEVEL_3
+                // concerne le client qui déclare son activité — donc un
+                // champ « source de revenus » obligatoire au passage.
+                throw new FinCoreException(ErrorCode.VALIDATION_FAILED,
+                        "Le passage au niveau LEVEL_3 requiert une source de revenus déclarée.",
+                        Map.of("errors", Map.of("sourceRevenus", "obligatoire")));
             }
         }
         if (request.idDocType() != null) {

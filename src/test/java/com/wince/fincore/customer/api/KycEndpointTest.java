@@ -179,6 +179,65 @@ class KycEndpointTest {
                 .andExpect(jsonPath("$.code").value("CUSTOMER_UNDERAGE"));
     }
 
+    // ── LEVEL_3 — RG-KYC-02 (ADMIN seul + source de revenus) ──────────────
+
+    @Test
+    @DisplayName("Matrice §5 + RG-KYC-02 : TELLER tente LEVEL_3 → 403 ACCESS_DENIED (ADMIN seul)")
+    void teller_cannot_reach_level_3() throws Exception {
+        String tellerEmail = "teller-lvl3-" + uniqueEmail();
+        userRepository.save(new AppUser(tellerEmail, passwordEncoder.encode(STRONG_PASSWORD), Role.TELLER));
+        String tellerToken = read(login(tellerEmail), "$.accessToken");
+
+        MvcResult customer = registerCustomer("teller3-" + uniqueEmail());
+
+        mockMvc.perform(patch("/api/v1/customers/" + customerId(customer) + "/kyc")
+                        .header("Authorization", "Bearer " + tellerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kycLevel\":\"LEVEL_3\",\"idDocType\":\"ID_CARD\",\"idDocNumber\":\"0123456789\",\"sourceRevenus\":\"Emploi salarié\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("ACCESS_DENIED"));
+    }
+
+    @Test
+    @DisplayName("RG-KYC-02 : ADMIN monte en LEVEL_3 avec source de revenus → 200 masqué, aucun numéro clair (CA-KYC-01)")
+    void admin_reaches_level_3_with_declared_source_of_revenue() throws Exception {
+        String adminEmail = "admin-lvl3-" + uniqueEmail();
+        userRepository.save(new AppUser(adminEmail, passwordEncoder.encode(STRONG_PASSWORD), Role.ADMIN));
+        String adminToken = read(login(adminEmail), "$.accessToken");
+
+        MvcResult customer = registerCustomer("admin3-" + uniqueEmail());
+
+        MvcResult result = mockMvc.perform(patch("/api/v1/customers/" + customerId(customer) + "/kyc")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kycLevel\":\"LEVEL_3\",\"idDocType\":\"ID_CARD\",\"idDocNumber\":\"0123456789\",\"sourceRevenus\":\"Emploi salarié\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kycLevel").value("LEVEL_3"))
+                .andExpect(jsonPath("$.idDocNumberMasked").value("****6789"))
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString(StandardCharsets.UTF_8))
+                .doesNotContain("0123456789");
+    }
+
+    @Test
+    @DisplayName("RG-KYC-02 : ADMIN sans source de revenus → 400 VALIDATION_FAILED (errors.sourceRevenus)")
+    void admin_level_3_requires_declared_source_of_revenue() throws Exception {
+        String adminEmail = "admin-lvl3b-" + uniqueEmail();
+        userRepository.save(new AppUser(adminEmail, passwordEncoder.encode(STRONG_PASSWORD), Role.ADMIN));
+        String adminToken = read(login(adminEmail), "$.accessToken");
+
+        MvcResult customer = registerCustomer("admin3b-" + uniqueEmail());
+
+        mockMvc.perform(patch("/api/v1/customers/" + customerId(customer) + "/kyc")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"kycLevel\":\"LEVEL_3\",\"idDocType\":\"ID_CARD\",\"idDocNumber\":\"0123456789\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.errors.sourceRevenus").isNotEmpty());
+    }
+
     // ── Passerelles ──────────────────────────────────────────────────────
 
     /** Connexion par mot de passe — jeton d'accès pour les appels protégés. */
@@ -197,6 +256,13 @@ class KycEndpointTest {
                         .content(credentials(email, "Marie", "Dupont", "1990-01-05", "0612345678")))
                 .andExpect(status().isCreated())
                 .andReturn();
+    }
+
+    /** Id du `Customer` lié à l'id de l'utilisateur (§5 — le `{id}` des PATCH). */
+    private UUID customerId(MvcResult customer) throws Exception {
+        return customerRepository.findByUserId(UUID.fromString(read(customer, "$.userId")))
+                .orElseThrow(() -> new AssertionError("le client n'a pas été créé à l'inscription"))
+                .getId();
     }
 
     private static String credentials(String email, String firstName, String lastName,
