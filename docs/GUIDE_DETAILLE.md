@@ -904,3 +904,153 @@ if (request.kycLevel() == KycLevel.LEVEL_3
 2. **Découvrir le type JUnit** : `./mvnw verify -Dtest=KycEndpointTest` → **9 tests verts** dans `target/surefire-reports/com.wince.fincore.customer.api.KycEndpointTest.txt` — grep `Tests run:`.
 3. **Ajoute-toi un test** : un `AUDITOR` tente le PATCH — la matrice §5 ne donne aucun droit PATCH à l'AUDITOR — écris ton test (401 sans jeton, 403 avec jeton AUDITOR — même pattern que `matrice_des_droits_admin_autorise` de Phase 2), relance `./mvnw verify`.
 4. **Mutation pédagogique (aucun commit)** : supprime le bloc ADMIN du contrôleur → relance `./mvnw verify` → `teller_cannot_reach_level_3` rouge (200 au lieu de 403) → rétablis le bloc.
+
+---
+
+# PHASE 4 — F-03 : Comptes + numéro de compte modulo 97 + comptes système + seed — ✅ FAIT
+
+> **Statut : FAIT — suite verte.** `Tests run: 107, Failures: 0, Errors: 0, Skipped: 0` (43 nouveaux vs Phase 3 — 107 − 64), `BUILD SUCCESS` (23/11/2026).
+> Tests : `AccountEndpointTest` 19, `AccountServiceTest` 19, `AccountNumberGeneratorTest` 5.
+> Detail file-level : `detail_projet/phase4.md`.
+
+## 4.1 Objectif de la phase (3 lignes)
+
+1. Introduire l'entité **compte client** (`account`) — devises `XOF`/`EUR`/`USD` — numéro BEN unique — statuts `ACTIVE`/`FROZEN`/`CLOSED` — RG-ACC-01 à 04.
+2. Générer et valider les numéros de compte — clé mod 97 sur 10 chiffres — pré-contrôle bénéficiaire — RG-ACC-03 — §8 — CA-ACC-01.
+3. Créer les comptes systèmes (`CASH_VAULT`, `FEE_REVENUE`, `FX_POSITION`, `EXTERNAL_SETTLEMENT`, `SUSPENSE`, `INTEREST_EXPENSE` — 6 × 3 devises) au démarrage — migration + seed — RG-ACC-06.
+
+## 4.2 Notions à comprendre
+
+- **`VARCHAR` + `CHECK` — enuméré fermé dans la base** — équivalent de V3 — ajouter un niveau = constante + nouveau CHECK + nouveau déploiement — Pattern de `KycLevel` (Phase 3) — `AccountKind`, `SystemCode`, `AccountStatus`.
+- **Mod 97 — `BigInteger`, pas `int`** — 10 chiffres peuvent dépasser `Integer.MAX_VALUE` — `AccountNumberGeneratorTest.check_key_convention_on_generated_example` — echo BCMath (`bcdiv`/`bcmod`) — Phase 5 (F-04 — RG-LED-06) — nettoyage verrou.
+- **`Account.customerId` vs `AppUser.id`** — lien session/métier — resolveur `currentCustomerId()` — voir 4.5c.
+- **`AccountNumberGenerator` — pure function** — `generate()`/`isValid()` — « validation de la clé à chaque saisie d'un numéro de bénéficiaire » (RG-ACC-03) — consommé par `AccountService.lookupBeneficiary` (`GET /accounts/lookup` — §8 — F-06).
+- **Piège P4-1** : `Account.currency` — Hibernate 6 mappe les enums à `smallint` par défaut — conflit avec la colonne `VARCHAR(3)` — `SchemaManagementException` — « expecting [smallint (TINYINT)] » — voir 4.7.
+
+## 4.3 Commandes exécutées
+
+| Commande | Ce qu'elle fait | Pourquoi l'avoir lancée | Importance |
+|---|---|---|---|
+| `./mvnw verify` | Compile + exécute toutes les suites (unitaires + d'intégration Testcontainers) | `Tests run: 107, Failures: 0, Errors: 0, Skipped: 0` + `BUILD SUCCESS` — preuve par HTTP/SQL de CA-ACC-01/02 + RG-ACC-06 | ✅ CRITIQUE |
+| `git status --short` | État de l'arborescence (7 fichiers modifiés) | Préparation aux commits par l'auteur | Importante |
+
+## 4.4 Fichiers créés ou modifiés
+
+| Fichier | Rôle |
+|---|---|
+| `src/main/java/com/wince/fincore/account/domain/Account.java` | Entity `account` — §6.1 — `currency` `@Enumerated(EnumType.STRING)` |
+| `src/main/java/com/wince/fincore/account/domain/AccountKind.java` | `CURRENT, SAVINGS, WALLET, SYSTEM` — §6.1, RG-ACC-01 |
+| `src/main/java/com/wince/fincore/account/domain/SystemCode.java` | `CASH_VAULT, FEE_REVENUE, FX_POSITION, EXTERNAL_SETTLEMENT, SUSPENSE, INTEREST_EXPENSE` — RG-ACC-06 |
+| `src/main/java/com/wince/fincore/account/domain/AccountStatus.java` | `ACTIVE, FROZEN, CLOSED` — RG-ACC-04 |
+| `src/main/java/com/wince/fincore/account/repository/AccountRepository.java` | `findByCustomerIdAndKindAndCurrency`, `findByAccountNumber`, `existsByAccountNumber`, `findByCustomerId`, `findAllBySystemCode` |
+| `src/main/java/com/wince/fincore/account/application/AccountNumberGenerator.java` | Génération — `SecureRandom`, 10 chiffres (1er non nul) + clé — convention ICC — pure function |
+| `src/main/java/com/wince/fincore/account/application/AccountService.java` | §8 — `open`, `findByCustomerId`, `findById` (CA-ACC-02), `changeStatus` (RG-ACC-04/05), `lookupBeneficiary` (pré-contrôle — RG-ACC-03, F-06) |
+| `src/main/java/com/wince/fincore/account/api/AccountController.java` | §8 — `POST /accounts` (201 — pattern AuthController), `GET /accounts`, `GET /accounts/{id}`, `GET /accounts/lookup`, `PATCH /accounts/{id}/status` — DTO `@Valid` |
+| `src/main/java/com/wince/fincore/account/api/OpenAccountRequest.java` | DTO POST — `currency` NULL → XOF — RG-ACC-01 |
+| `src/main/java/com/wince/fincore/account/api/AccountStatusUpdateRequest.java` | DTO PATCH — `status` obligatoire — `motif` obligatoire FROZEN/CLOSED (F-13) |
+| `src/main/java/com/wince/fincore/account/api/AccountResponse.java` | DTO de réponse — miroir `account` |
+| `src/main/java/com/wince/fincore/account/api/AccountLookupResponse.java` | Pré-contrôle — `maskedName` — « J*** D*** » — F-06 — CA-KYC-01 |
+| `src/main/java/com/wince/fincore/customer/domain/Customer.java` | **Modifié** : `setKycStatus(KycStatus)` — Phase 3 → 4 — RG-ACC-02 — vérifiée via `open_account_for_rejected_customer_400` |
+| `src/main/resources/db/migration/V4__create_account.sql` | Migration — `CREATE TABLE account` + CHECKs + UQ partiel + **seed des comptes systèmes** (6 × 3 devises) — RG-ACC-06 |
+| `src/test/java/com/wince/fincore/account/application/AccountNumberGeneratorTest.java` | Unit — CA-ACC-01 — convention mod 97 — distinctness 100 |
+| `src/test/java/com/wince/fincore/account/application/AccountServiceTest.java` | Unit — `open`, `findById` (CA-ACC-02), `changeStatus`, `lookupBeneficiary` |
+| `src/test/java/com/wince/fincore/account/api/AccountEndpointTest.java` | Intégration — 19 tests — §5 — CA-ACC-01/02 — RG-ACC-06 — PostgreSQL réel (Testcontainers) |
+
+## 4.5 Code clé
+
+### a. Génération et validation — `AccountNumberGenerator` (RG-ACC-03)
+
+```java
+public static String generate() {
+    String body = generateBody();                    // 10 chiffres — 1er non nul
+    return PREFIX + body + String.format("%02d", checkKey(body));
+}
+
+private static int checkKey(String body) {
+    return MOD - new BigInteger(body).mod(BigInteger.valueOf(MOD)).intValue();  // 97 − (n mod 97) — borne 1..97
+}
+
+public static boolean isValid(String accountNumber) {
+    // préfixe BJ, longueur 14, body \d{10}, clé \d{2} — clé == 97 − (n mod 97)
+}
+```
+
+**Piège P4-2** : le changement de convention de la clé — éviter `97 - mod` qui peut donner `0` — la convention ICC donne 97 — ici la borne est 1..97 — vérifiée dans le test.
+
+### b. Ouverture — `AccountService.open`
+
+```java
+Customer customer = customerRepository.findById(request.customerId()).orElseThrow(...);
+if (customer.getKycStatus() == KycStatus.REJECTED) {
+    throw new FinCoreException(ErrorCode.VALIDATION_FAILED, "...");   // RG-ACC-02 — Phase 3 — Customer.setKycStatus
+}
+if (accountRepository.findByCustomerIdAndKindAndCurrency(id, kind, currency).isPresent()) {
+    throw new FinCoreException(ErrorCode.VALIDATION_FAILED, "...");   // RG-ACC-02 — un seul compte par (type, devise)
+}
+Account account = new Account(UUID.randomUUID(), generateUniqueAccountNumber(),
+        request.customerId(), request.kind(), null, currency, Money.zero(currency).amount());
+account.setOpenedAt(clock.instant());
+return accountRepository.save(account);
+```
+
+### c. 404 — CA-ACC-02 — `AccountService.findById`
+
+```java
+if (role == Role.CUSTOMER
+        && (account.isSystem() || currentCustomerId == null
+                || account.getCustomerId() == null
+                || !account.getCustomerId().equals(currentCustomerId))) {
+    throw new FinCoreException(ErrorCode.RESOURCE_NOT_FOUND, "Compte introuvable.");
+}
+```
+
+- `currentCustomerId` = id du `Customer` lié à l'AppUser — `customerRepository.findByUserId(userId).map(Customer::getId)` — `userId` = `currentUserId()` (claim `sub` du JWT — RG-AUTH-06) — null si l'ADMIN n'a pas de Customer — `Account.customer_id` → `customer.id` (§6.1).
+
+### d. Seed — `V4__create_account.sql` (RG-ACC-06)
+
+```sql
+WITH pairs(code, kind, ccy) AS (VALUES (…18 tuples…)),
+gen AS (SELECT code, kind, ccy, floor(random() * 9000000000 + 1000000000)::bigint AS body FROM pairs)
+INSERT INTO account (id, account_number, kind, system_code, currency, status, balance, version, opened_at)
+SELECT gen_random_uuid(),
+       'BJ' || lpad(body::text, 10, '0') || lpad((97 - (body % 97::bigint))::text, 2, '0'),
+       kind, code, ccy, 'ACTIVE', 0, 0, now()
+FROM gen;
+```
+
+- **Convention** : clé SQL = `97 − (n % 97)` — compatible `AccountNumberGenerator.checkKey` — vérifiable via `AccountEndpointTest.system_accounts_are_seeded_at_startup` — `isValid` sur chaque ligne seedée —echo RG-ACC-06.
+
+## 4.6 Comment vérifier
+
+- **Suite complète** : `./mvnw verify` → `Tests run: 107, Failures: 0, Errors: 0` — inclut :
+  - `AccountEndpointTest.teller_opens_account_201` : TELLER + `POST /accounts` → 201 — `id`, `accountNumber` valide, `status=ACTIVE`, `currency=XOF`, `customerId`, line persistée — CA-ACC-02 via `customer_cannot_read_others_account_404` (404 pour un autre client) ;
+  - `AccountEndpointTest.system_accounts_are_seeded_at_startup` : 6 comptes systèmes — `Account::isSystem`, `customerId NULL`, `status ACTIVE`, `isValid` — RG-ACC-06 — seed en migration ;
+  - `AccountEndpointTest.admin_cannot_freeze_system_account_409` : statut système immutable — 409 — RG-ACC-06 ;
+  - `AccountEndpointTest.admin_cannot_close_account_with_nonzero_balance_409` : solde non nul — 409 — RG-ACC-05.
+- **Manuel (live)** : `curl.exe -X POST -H "Authorization: Bearer <ADMIN>" -H "Content-Type: application/json" http://localhost:8080/api/v1/accounts -d '{"customerId":"…","kind":"WALLET","currency":"EUR"}'` → 201 Created — contradiction ?— non — 201 attendu — pattern Phase 2.
+- **Base** : `SELECT account_number, kind, currency, balance FROM account WHERE customer_id IS NULL;` → 18 lignes — comptes systèmes — validation : `SELECT account_number FROM account WHERE length(account_number) <> 14 OR substring(account_number, 1, 2) <> 'BJ';` → vide.
+
+## 4.7 Pièges rencontrés
+
+1. **P4-1 — `Schema validation: wrong column type in column [currency]; found [varchar], expecting [smallint (TINYINT)]`** — `Account.currency` est un `enum` JPA — JPA mappe les enums à `int` par défaut (`@Enumerated` absent) — conflit avec la colonne `VARCHAR(3)` — ajout de `@Enumerated(EnumType.STRING)` — piège pédagogique Phase 1 (`Currency` dans `Money`).
+2. **P4-2 — `Status expected:<201> but was:<200>`** — `@PostMapping` — 200 — pattern `AuthController.register` — `ResponseEntity.status(HttpStatus.CREATED).body(...)` — Phase 2 — `AccountController.open` — POST = création — 201.
+3. **Piège méta — diagnostique difficile : `No enum constant com.wince.fincore.identity.domain.Role.R_BEARER` → 500** — sur `GET /accounts/{id}` par ADMIN — `currentRole()` manipule désormais le claim du JWT — `Role.valueOf(jwt.getClaimAsString("role"))` — RG-AUTH-06 — plus robuste que la manipulation des autorités Spring Security 7 — vérifiable via `admin_reads_account_detail_200`.
+4. **Mutation test pédagogique (aucun commit)** : supprime localement le bloc REJECTED de `AccountService.open` — `AccountEndpointTest.open_account_for_rejected_customer_400` rouge — rétabris.
+
+## 4.8 Questions d'entretien — Phase 4
+
+**Q1. Comment calculer une clé de contrôle modulo 97 sans perdre en précision ?** — `String body` → `new BigInteger(body)` → `.mod(BigInteger.valueOf(97))` → `97 − r` — borne 1..97 — éviter `int` (jusqu'à 9 999 999 999 — jusque `Integer.MAX_VALUE` = 2 147 483 647 — voir `AccountNumberGeneratorTest`) — BCMath (`bcsub`, `bcmod`) — Phase 5.
+
+**Q2. Comment représenter un numéro de 10 chiffres ?** — `String` — validation à l'API — pré-contrôle — 400 `INVALID_ACCOUNT_NUMBER` — RG-ACC-03 — `GET /accounts/lookup?number=…` (§8 — F-06).
+
+**Q3. Comment représenter un solde dans l'API ? (§6.1 — `balance NUMERIC`)** — `AccountResponse.balance` est un `BigDecimal` — l'échelle de la devise — `Money` — 0 XOF — 2 EUR/USD — sérialisé en JSON (`0`, `12.34`) — suivi — `spring.jackson.default-property-inclusion: non_null` — Phase 5.
+
+**Q4. Comment implémenter « un seul compte par (type, devise) » — RG-ACC-02 ?** — Backstop SQL — UQ partiel — `CREATE UNIQUE INDEX uq_account_customer_kind_currency ON account (customer_id, kind, currency) WHERE customer_id IS NOT NULL` — pourquoi PARTIEL — NULL ≠ NULL — Backstop Java — `AccountService.open` — `findByCustomerIdAndKindAndCurrency(...).isPresent()` → 400 — Client REJECTED — `KycStatus.REJECTED` — Phase 3 — `Customer.setKycStatus`.
+
+**Q5. À quoi sert la colonne `version` (§6.1) — Phase 4 ?** — BIGINT — présent, stocké — pas encore utilisé — Phase 5 (F-04 — RG-LED-06) — nettoyage verrou — Pattern pédagogique (Phase 0/2 — §6.2 — « verrou optimiste JPA »).
+
+## 4.9 Exercice pour l'apprentissage
+
+1. **Découvrir le flux** : `./mvnw verify -Dtest=AccountEndpointTest#teller_opens_account_201` — 1 test vert — injecter un `System.out.println` dans `AccountService.open` — observer — supprimer.
+2. **Mutation test (aucun commit)** : supprime localement le bloc REJECTED de `AccountService.open` — relance `./mvnw verify` — `AccountEndpointTest.open_account_for_rejected_customer_400` rouge — rétabris.
+3. **Remarque pédagogique** : le mod 97 — `AccountNumberGeneratorTest` — convention écrite en SQL (`V4`) et reproduite en Java (`AccountNumberGenerator.checkKey`) — difficile à tromper — vérifiable via `AccountEndpointTest.system_accounts_are_seeded_at_startup` — `isValid(numéro)` sur chaque ligne seedée.

@@ -183,6 +183,11 @@ public class Customer {
         this.kycLevel = kycLevel;
     }
 
+    /** Positionnement du statut KYC — F-02 (Phase 3) — Phase 4 (F-03) : statuts de comptes rejetés (RG-ACC-02). */
+    public void setKycStatus(KycStatus kycStatus) {
+        this.kycStatus = kycStatus;
+    }
+
     /**
      * Hache le numéro de pièce et masque ses 4 derniers chiffres (RG-KYC-03).
      *

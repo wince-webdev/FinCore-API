@@ -16,7 +16,7 @@
 | `phase1.md` | ✅ FAIT | Money, erreurs RFC 9457, correlationId, Swagger, Clock |
 | `phase2.md` | ✅ FAIT | F-01 Authentication (JWT, refresh, rotation, verrouillage) |
 | `phase3.md` | ✅ FAIT | F-02 Clients et KYC |
-| `phase4.md` | ⏳ PRÉVUE | F-03 Comptes + numéro mod 97 + seed |
+| `phase4.md` | ✅ FAIT | F-03 Comptes + numéro mod 97 + comptes système + seed |
 | `phase5.md` | ⏳ PRÉVUE | F-04 Grand livre + F-05 Dépôts / retraits |
 | `phase6.md` | ⏳ PRÉVUE | F-06 Virements + plafonds + idempotence + F-09 Contre-passation + F-12 Audit |
 | `phase7.md` | ⏳ PRÉVUE | F-07 Multi-devises |
