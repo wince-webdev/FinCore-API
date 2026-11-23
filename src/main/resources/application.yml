@@ -62,7 +62,23 @@ spring:
     problemdetails:
       enabled: true
 
-  # --- Pour l'instant, pas de sécurité OAuth2 configurée (phase 2) ---
+# =====================================================================
+# Paramètres FinCore (hors Spring) — phase 2 : authentification F-01
+# =====================================================================
+fincore:
+  security:
+    # Secret de signature HS256 (RG-AUTH-06) : ≥ 256 bits = 32 octets.
+    # Lu par JETEUR (JwtService) et VÉRIFICATEUR (JwtDecoder) — une seule
+    # propriété, donc une seule source de vérité pour la clé.
+    # La valeur par défaut ci-dessous est VOLONTAIREMENT un identifiant de
+    # secours « dev only » : le profil prod ne la redéfinit PAS, donc
+    # ${FINCORE_JWT_SECRET} sans valeur de repli → échec net au démarrage
+    # plutôt qu'un secret faible en production (règle §2.3 « secrets hors code »).
+    jwt-secret: ${FINCORE_JWT_SECRET:dev-SECRET-a-ne-jamais-utiliser-hors-local-0123456789}
+    access-ttl-minutes: 15 # RG-AUTH-03 : access token 15 min
+    refresh-ttl-days: 7 # RG-AUTH-03 : refresh token 7 jours
+    max-failed-attempts: 5 # RG-AUTH-05 : verrouillage après 5 échecs
+    lock-minutes: 15 # RG-AUTH-05 : verrou de 15 minutes
 
 # =====================================================================
 # Actuator — santé et métriques
@@ -136,6 +152,13 @@ springdoc:
     enabled: false
   swagger-ui:
     enabled: false
+
+# En prod, AUCUNE valeur de repli : si FINCORE_JWT_SECRET n'est pas défini,
+# le placeholder explose au démarrage — on préfère refuser de servir plutôt
+# que de signer les jetons avec le secret « dev ».
+fincore:
+  security:
+    jwt-secret: ${FINCORE_JWT_SECRET}
 
 management:
   endpoint:

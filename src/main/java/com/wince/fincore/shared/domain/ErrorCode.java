@@ -36,6 +36,9 @@ public enum ErrorCode {
     LIMIT_EXCEEDED(422, "Plafond dépassé", "limit-exceeded"),
     IDEMPOTENCY_KEY_REUSED(422, "Clé d'idempotence réutilisée", "idempotency-key-reused"),
 
+    /** Client mineur non majeur — RG-KYC-04, CA-KYC-02 (§7 F-02). */
+    CUSTOMER_UNDERAGE(422, "Client mineur non majeur", "customer-underage"),
+
     // ── 423 ──────────────────────────────────────────────────────────────
     ACCOUNT_LOCKED(423, "Compte verrouillé", "account-locked"),
 

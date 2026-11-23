@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -124,6 +125,27 @@ public class GlobalExceptionHandler {
     public ProblemDetail onNotFound(NoResourceFoundException ex, HttpServletRequest request) {
         log.debug("Ressource introuvable : {}", ex.getResourcePath());
         return problem(ErrorCode.RESOURCE_NOT_FOUND, "La ressource demandée n'existe pas.", request);
+    }
+
+    // ── 3.bis Refus d'accès levé DANS un contrôleur ─────────────────────
+
+    /**
+     * Piège Spring Security × MVC : une {@link AccessDeniedException}
+     * levée <em>à l'intérieur</em> d'un handler ({@code @PreAuthorize} sur
+     * une méthode) est interceptée par le {@code DispatcherServlet} et
+     * n'atteint jamais l'{@code ExceptionTranslationFilter} de la chaîne de
+     * sécurité. Sans ce handler, elle tomberait sur le catch-all ci-dessous
+     * → 500 au lieu du 403 attendu par CA-AUTH-04.
+     *
+     * <p>Les refus produits <em>par les filtres</em> (URL non autorisée)
+     * continuent d'être traités par le {@code accessDeniedHandler} de
+     * {@code SecurityConfig} : les deux chemins répondent la même forme.</p>
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ProblemDetail onAccessDenied(AccessDeniedException ex, HttpServletRequest request) {
+        log.warn("Accès refusé : {}", ex.getMessage());
+        return problem(ErrorCode.ACCESS_DENIED,
+                "Vous n'avez pas les droits nécessaires pour cette ressource.", request);
     }
 
     // ── 4. Filet de sécurité : toute autre exception ─────────────────────
