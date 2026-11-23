@@ -1,6 +1,10 @@
 package com.wince.fincore.customer.api;
 
 import com.wince.fincore.customer.application.CustomerService;
+import com.wince.fincore.customer.domain.KycLevel;
+import com.wince.fincore.identity.domain.Role;
+import com.wince.fincore.shared.domain.ErrorCode;
+import com.wince.fincore.shared.domain.FinCoreException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -54,10 +58,18 @@ public class CustomerController {
     @PatchMapping("/{id}/kyc")
     @PreAuthorize("hasRole('TELLER') or hasRole('ADMIN')")
     @Operation(summary = "Carte KYC",
-            description = "Monter de niveau (RG-KYC-02) — matrice §5 (TELLER, ADMIN).")
+            description = "Monter de niveau (RG-KYC-02) — matrice §5 (TELLER, ADMIN), "
+                    + "exception : LEVEL_3 — ADMIN seul.")
     public CustomerResponse updateKyc(
             @PathVariable UUID id,
             @Valid @RequestBody KycUpdateRequest request) {
+        // RG-KYC-02 : « LEVEL_3 (justificatif de domicile + source de revenus
+        // déclarée) est validé par un ADMIN » — le TELLER est validé à
+        // LEVEL_2 seul, l'escalade à LEVEL_3 demande le rôle ADMIN.
+        if (request.kycLevel() == KycLevel.LEVEL_3 && !hasAuthority(Role.ADMIN)) {
+            throw new FinCoreException(ErrorCode.ACCESS_DENIED,
+                    "Seul un ADMIN peut atteindre le LEVEL_3 (RG-KYC-02).");
+        }
         return CustomerResponse.from(customerService.updateKyc(id, request));
     }
 
@@ -65,5 +77,13 @@ public class CustomerController {
     private UUID currentUserId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         return UUID.fromString(((Jwt) authentication.getPrincipal()).getSubject());
+    }
+
+    /** Autorité courante du client authentifié (préfixe `ROLE_` — claim `role` du JWT, voir `IdentitySecurityConfig`). */
+    private boolean hasAuthority(Role role) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        return authentication != null
+                && authentication.getAuthorities().stream()
+                        .anyMatch(a -> a.getAuthority().equals("ROLE_" + role.name()));
     }
 }

@@ -675,3 +675,382 @@ disque, requête SQL) — c'est la règle OWASP A05:2021.
 3. Appelez l'API avec un `X-Correlation-Id` de votre choix, provoquez une
    erreur, et **retrouvez** ce même identifiant dans la sortie console de
    l'app : prouvez la corrélation bout-en-bout.
+
+---
+
+# PHASE 2 — F-01 : Authentification (inscription, login, refresh, logout) — ✅ FAIT
+
+> **Statut : FAIT — suite verte.** `Tests run: 46, Failures: 0, Errors: 0, Skipped: 0`,
+> `BUILD SUCCESS` (vérifié le 20/11/2026 avec `.\mvnw.cmd test`).
+
+## 2.1 Objectif de la phase (3 lignes)
+
+1. Prouver que la stack de sécurité de Boot 4 / Spring Security 7 fonctionne : JWT, resource server, rôles.
+2. Implémenter la fonctionnalité **F-01** (RG-AUTH-01 à 06, CA-AUTH-01 à 04) : inscription publique, login avec vérification de mot de passe et verrouillage, refresh token rotatif, logout.
+3. Mettre en place la matrice de droits de base (CUSTOMER vs autres rôles) via `SecurityFilterChain` — pour la phase 3 (K Client/KYC).
+
+## 2.2 Notions à comprendre
+
+- **JWT (JSON Web Token)** — chaîne `header.payload.signature`, en base64url — ici signature **HS256** (HMAC-SHA256) avec une clé secrète **≥ 256 bits** via variable d'environnement (`FINCORE_JWT_SECRET`) — analogie Symfony : le token d'accès de `lexik/jwt-authentication-bundle`, mais sans bundle : Spring Security 7 appelle directement notre `JwtDecoder`.
+- **Resource server** — Spring Security ne vérifie pas le token d'accès lui-même : il délage à `JwtDecoder` (bean de `identity`) — le client ne possède PAS la clé de signature.
+- **Refresh token opaque** — jeté au milieu, conservé uniquement de façon **hachée** (SHA-256) en base — "opaque" = le serveur ne connaît pas sa structure.
+- **Anti-énumération (RG-AUTH-05)** — « utilisateur inconnu » et « mauvais mot de passe » renvoient **exactement** le même 401 — compensé par le timing (BCrypt) — motif du jeton jeté avec `unknownUserHash`.
+- **Timing attack** — attaque par comparaison de réponses lentes/rapides — le verrouillage après 5 échecs (RG-AUTH-05) évite aussi l'essai indéfini.
+
+## 2.3 Commandes exécutées
+
+| Commande | Ce qu'elle fait | Pourquoi l'avoir lancée | Importance |
+|---|---|---|---|
+| `java -version` | Affiche la version du JDK (`27.0.1.0.3+1-2`) | Vérifier que le JDK est présent — cible Java 25 LTS — repli possible sur Java 21 (voir cahier §2.3) — on note le poste en 27 (non LTS, accepted for the exercise) | Importante |
+| `docker version` | Affiche client+server Docker (29.8.1, Desktop 4.93.0) | Vérifier que Docker Desktop tourne — indispensable aux Tests Testcontainers — base PostgreSQL éphémère pendant les tests | Importante |
+| `.\mvnw.cmd test` | Compile et exécute **toutes** les tests Maven (unitaires + d'intégration Testcontainers) | **Exécution de la phase 2** — AuthFlowTest + PasswordPolicyTest + suite classique — résultat : `Tests run: 46, Failures: 0, Errors: 0` + `BUILD SUCCESS` | ✅ CRITIQUE |
+
+## 2.4 Fichiers créés ou modifiés
+
+| Fichier | Rôle |
+|---|---|
+| `src/main/java/com/wince/fincore/identity/api/AuthController.java` | Contrôleur public `POST /api/v1/auth/{register,login,refresh}` + `/auth/logout` — délage vers `AuthService` |
+| `src/main/java/com/wince/fincore/identity/api/RegisterRequest.java` | DTO `email` + `password` (Bean Validation) — RG-AUTH-02 (que des CUSTOMER) |
+| `src/main/java/com/wince/fincore/identity/api/LoginRequest.java` | DTO `email` + `password` — format e-mail valide, mais l'existence du compte **jamais** révélée (RG-AUTH-05) |
+| `src/main/java/com/wince/fincore/identity/api/RefreshTokenRequest.java` | DTO `refreshToken` — le jeton voyage dans le **corps** (pas en URL — pas dans les logs) |
+| `src/main/java/com/wince/fincore/identity/api/AuthResponse.java` | Record : `userId, email, role, tokenType, accessToken, expiresIn, refreshToken` |
+| `src/main/java/com/wince/fincore/identity/application/AuthService.java` | Orchestre PasswordPolicy + JwtService + RefreshTokenService — inscription, login (verrouillage RG-AUTH-05), rotation, logout — une seule classe qui sabre la logique métier — testable sans servlet ni container |
+| `src/main/java/com/wince/fincore/identity/application/PasswordPolicy.java` | Politique RG-AUTH-01 (≥ 12 car., majuscule + minuscule + chiffre + spécial) — renvoie **toute la liste** des règles violées en une seule erreur 400 |
+| `src/main/java/com/wince/fincore/identity/application/JwtService.java` | Émission des access tokens HS256 avec les claims `sub` (UUID), `role`, `iat`, `exp` (15 min), `jti` |
+| `src/main/java/com/wince/fincore/identity/application/RefreshTokenService.java` | Génération (256 bits), rotation (invalide le jeton présenté + chaîne de suivi), révocation de famille (RG-AUTH-04), lookup par hash SHA-256 |
+| `src/main/java/com/wince/fincore/identity/domain/AppUser.java` | Entité JPA `app_user` (email, passwordHash, role, enabled, failedAttempts, lockedUntil) + logique de verrouillage |
+| `src/main/java/com/wince/fincore/identity/domain/RefreshToken.java` | Entité JPA `refresh_token` : id, user, tokenHash, expiresAt, revokedAt, replacedBy |
+| `src/main/java/com/wince/fincore/identity/domain/Role.java` | Enuméré `CUSTOMER / TELLER / ADMIN / AUDITOR` |
+| `src/main/java/com/wince/fincore/identity/infrastructure/IdentitySecurityConfig.java` | Beans du resource server JWT : `JwtDecoder` + convertisseur du claim `role` → autorité `ROLE_CUSTOMER` (utilisé par `hasRole("ADMIN")`) |
+| `src/main/java/com/wince/fincore/shared/infrastructure/SecurityConfig.java` | Chaîne de sécurité : `permitAll` sur `/auth/{register,login,refresh}` + santé/Swagger, `authenticated()` sinon, `oauth2ResourceServer` + `PasswordEncoder` bean (BCrypt 12) |
+| `src/main/java/com/wince/fincore/shared/api/GlobalExceptionHandler.java` | + `@ExceptionHandler(AccessDeniedException)` : 403 `ACCESS_DENIED` typé pour les règles déclenchées **dans** un contrôleur |
+| `src/main/resources/db/migration/V2__create_refresh_token.sql` | Migration `refresh_token` (`id UUID PK`, `user_id FK`, `token_hash VARCHAR(64) UNIQUE`, `expires_at`, `revoked_at`, `replaced_by`) + index + CHECK sur la longueur du hash |
+| `src/main/resources/application.yml` | + `fincore.security.*` (secret, TTL 15 min, TTL refresh 7 j, 5 échecs, 15 min de verrou) — en prod : `FINCORE_JWT_SECRET` sans valeur de repli |
+| `src/main/java/com/wince/fincore/identity/repository/AppUserRepository.java` | `JpaRepository` : `findByEmail`, `existsByEmail` |
+| `src/main/java/com/wince/fincore/identity/repository/RefreshTokenRepository.java` | `JpaRepository` : `findByTokenHash`, `revokeAllForUser` (UPDATE JPQL) |
+| `src/test/java/com/wince/fincore/identity/api/AuthFlowTest.java` | Tests d'intégration F-01 (CA-AUTH-01 à 04) sur PostgreSQL réel via MockMvc + Testcontainers |
+| `src/test/java/com/wince/fincore/identity/application/PasswordPolicyTest.java` | Tests de PasswordPolicy |
+| `.env.example` | Variables de sécurité (`FINCORE_JWT_SECRET`), écrite en phase 2 |
+
+## 2.5 Code clé
+
+### a. JWT — emission des access tokens (`JwtService.issueAccessToken`)
+
+```java
+JwtClaimsSet claims = JwtClaimsSet.builder()
+        .issuer("fincore")
+        .subject(user.getId().toString())          // UUID de l'utilisateur (jamais l'email)
+        .issuedAt(now)
+        .expiresAt(now.plus(accessTokenTtl))        // 15 min (RG-AUTH-03)
+        .claim("role", user.getRole().name())      // le claim que convertissent SecurityConfig + IdentitySecurityConfig
+        .id(UUID.randomUUID().toString())          // jti
+        .build();
+return jwtEncoder.encode(JwtEncoderParameters.from(JwsHeader.with(HS256).build(), claims))
+        .getTokenValue();
+```
+
+**Retenir** : le JWT ne contient que des données **publiques** (identité + rôle). Le secret ne sert qu'à le signer — jeton d'accès court (15 min), pas une session.
+
+### b. Rotation + famille (`RefreshTokenService.rotate`)
+
+```java
+RefreshToken current = requireValid(presentedToken);
+if (current.isRevoked()) {                          // reuse detection
+    revokeFamilyInNewTransaction.execute(s -> repository.revokeAllForUser(userId, now));
+    throw new FinCoreException(ErrorCode.UNAUTHENTICATED, "Refresh token déjà utilisé…; session révoquée");
+}
+String newClearValue = issue(current.getUser());
+current.revokeAsReplacedBy(successorId, now);        // revoque le jeton présenté
+repository.save(current);
+```
+
+**Piège (CA-AUTH-03)** : la révocation de famille est **committée avant** que l'exception ne parte — sinon le `rollback` l'annulerait et le jeton volé resterait valide.
+
+### c. Matrice de droits (`SecurityConfig.baseSecurityFilterChain`)
+
+```java
+.requestMatchers("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/refresh")
+.permitAll()                   // c'est ici qu'un jeton est obtenu — on ne peut pas le protéger
+.anyRequest().authenticated()  // tout le reste requiert un jeton (401 sans jeton)
+```
+
+## 2.6 Comment vérifier
+
+- ✅ `.\mvnw.cmd test` → `BUILD SUCCESS`, `Tests run: 46, Failures: 0`.
+- En live (si la base docker tourne) : `Invoke-WebRequest http://localhost:8080/actuator/health` → `200` `{"status":"UP"}` — vérifier que `GET /api/v1/__probe/admin-only` → 401.
+
+## 2.7 Pièges rencontrés
+
+- **P2-1** : « Jwt and Opaque Token are the only supported formats » — il faut déclarer `.jwt(Customizer.withDefaults())` dans `oauth2ResourceServer` — la simple présence d'un bean `JwtDecoder` ne suffit plus.
+- **P2-2** : 403 au lieu de 401 sur les endpoints protégés par `@PreAuthorize` quand l'authentification est un `AccessDeniedException` — il l'atteint **dans** le contrôleur — il faut le `@ExceptionHandler(AccessDeniedException)` dans `GlobalExceptionHandler`.
+- **P2-3** : `FINCORE_JWT_SECRET` en prod — le profil prod redéfinit la propriété sans valeur de repli — si la variable d'environnement n'est pas posée, l'app **refuse de démarrer** (échec net) — c'est voulu.
+- **P2-4** : déclarer `jwt-secret` dans deux documents YAML — le dernier gagne en profil actif (document YAML à part entière par bloc).
+- **P2-5** : `version` (verrou optimiste JPA) — pas utilisé en phase 2 — utilisé pour la phase 5 (grand livre).
+
+## 2.8 Questions d'entretien — Phase 2
+
+**Q1. Quelles sont les différences entre access token et refresh token dans FinCore ?**
+Access token (JWT HS256, 15 min, vérifié par le serveur via `JwtDecoder` dans le resource server) et refresh token (opaque, 7 j, client détient la valeur en clair, hachée en base).
+
+**Q2. Pourquoi stocker uniquement le haché du refresh token ?**
+Defense en profondeur : si la base est exfiltrée, l'attaquant obtient des SHA-256 indevinables — ni réutilisables, ni éditables.
+
+**Q3. Comment fonctionne la rotation et la révocation de famille (RG-AUTH-04) ?**
+À chaque `/auth/refresh` : jeton présenté révoqué (`revokedAt = now`, lié à son successeur via `replacedBy`) + nouveau jeton émis. Si un jeton déjà utilisé est présenté → tous les jetons actifs révoqués d'un coup (`UPDATE ... WHERE user_id = ? AND revokedAt IS NULL` dans une transaction `REQUIRES_NEW`) + 401 — signal d'un vol de session.
+
+**Q4. Pourquoi le verrouillage après 5 échecs (RG-AUTH-05) et un message identique en toutes situations ?**
+5 échecs consécutifs → `lockedUntil = now + 15 min` — évite les attaques par force brute infinie — le message identique pour inconnu/erreur de mot de passe limite l'énumération d'utilisateurs — le timing est compensé par le `unknownUserHash`.
+
+**Q5. Comment Spring Security vérifie-t-il l'access token ?**
+`Authorization: Bearer <jwt>` — Spring Security appelle notre `JwtDecoder` (bean déposé par `IdentitySecurityConfig`) : signature HS256 + dates, puis délage aux autorités via `JwtGrantedAuthoritiesConverter` sur le claim `role`.
+
+## 2.9 Exercice pour l'apprentissage (Phase 2)
+
+1. Écris un test JUnit dans `AuthFlowTest` (ou `RefreshTokenServiceTest`) : vérifie que l'access token de l'utilisateur de test contient `sub == userId` et `role == "CUSTOMER"` (RG-AUTH-06) — ou relance `.\mvnw.cmd test -Dtest=AuthFlowTest` et compte 11 tests verts.
+2. Entraîne-toi à la rotation : dans une requête manuelle, appelle `POST /api/v1/auth/refresh` deux fois avec le même refresh token — la seconde appel renvoie **401** (CA-AUTH-03, replay détecté).
+3. **Tu pourrais ajouter** le test d'idempotence du login — un mot de passe trop court → 400 + `errors.password` non vide.
+
+---
+
+# PHASE 3 — F-02 : Clients et KYC — ✅ FAIT (suite verte : 64 tests)
+
+> Dépend de la Phase 2 (l'inscription par `/api/v1/auth/register` crée le `AppUser`). Le guide détaillé de la phase (détail file-level) : `detail_projet/phase3.md` — complément effectué en séance : LEVEL_3 = ADMIN seul + source de revenus déclarée (RG-KYC-02).
+
+## 3.1 Objectif de la phase (3 lignes)
+
+1. Introduire l'entité **client** (`customer`) : clé FK UNIQUE `user_id` vers `AppUser` (Phase 2) — énumérés `KycLevel` (`LEVEL_1/2/3`), `KycStatus` (`PENDING/VERIFIED/REJECTED`) (§6.1).
+2. Implémenter les routes du KYC — `GET /customers/me` (CUSTOMER), `PATCH /customers/{id}/kyc` (matrice §5 : TELLER, ADMIN — LEVEL_3 : ADMIN seul).
+3. Respecter l'intégrité des données : numéro d'identification **masqué** (RG-KYC-03), majeur/mineur via la `Clock` injectée (RG-KYC-04).
+
+## 3.2 Notions à comprendre
+
+- **Two entities = two collapsed templates (PHP/Symfony)** : `app_user` = session (login + verrouillage Phase 2), `customer` = données métier — SRP : on ne charge pas les secrets dans les données de session.
+- **`CHECK` PostgreSQL dans V3** : énuméré fermé — évoluable via migration (jamais modifier V3 commitée — éditer l'enum + migration à part).
+- **Le DTO valide la forme, le service valide les règles métier** — complément de la Phase 2 (PasswordPolicy) — prend la règle (« âge 18 ») qui a besoin du domaine, pas du schéma HTTP.
+- **Mutation test (P3-2)** : le TELLER est validé à LEVEL_2 — mais le LEVEL_3 est "déclaration d'activité représentée" — validée par ADMIN — RG-KYC-02 — niveau **dépendant du body** → vérification dans le contrôleur (SpEL statique insuffisant).
+
+## 3.3 Commandes exécutées
+
+| Commande | Ce qu'elle fait | Pourquoi l'avoir lancée | Importance |
+|---|---|---|---|
+| `./mvnw verify` | Compile + exécute **toutes** les suites Maven (unitaires + d'intégration Testcontainers) | Vérification globale de la phase 3 — résultat : `Tests run: 64, Failures: 0, Errors: 0` + `BUILD SUCCESS` | ✅ CRITIQUE — preuve par HTTP/SQL de CA-KYC-01 à 02 |
+| `git status --short` | État de l'arborescence (5 fichiers modifiés : 3 source + 2 test) | Préparation aux commits (par l'auteur) | Importante |
+
+> **P3-1** : 1er `./mvnw verify` passé en erreur — `Unhandled exception type Exception` dans `KycEndpointTest` — le helper `customerId(MvcResult)` appelle `read()` sans clause `throws Exception` — signature d'helper = exceptions lancées par le code appelé.
+
+## 3.4 Fichiers créés ou modifiés
+
+| Fichier | Rôle |
+|---|---|
+| `src/main/java/com/wince/fincore/customer/api/KycUpdateRequest.java` | **Modifié** : nouveau composant `sourceRevenus` — RG-KYC-02 (déclaration au LEVEL_3) |
+| `src/main/java/com/wince/fincore/customer/application/CustomerService.java` | **Modifié** : `sourceRevenus` obligatoire au LEVEL_3 → 400 `VALIDATION_FAILED` (`errors.sourceRevenus`) |
+| `src/main/java/com/wince/fincore/customer/api/CustomerController.java` | **Modifié** : bloc ADMIN au LEVEL_3 dans `updateKyc` (403 `ACCESS_DENIED`) + helper `hasAuthority(Role)` |
+| `src/test/java/com/wince/fincore/customer/api/KycEndpointTest.java` | **Modifié** : 3 nouveaux tests + helper `customerId(MvcResult)` |
+| `src/test/java/com/wince/fincore/customer/application/CustomerServiceTest.java` | **Modifié** : 2 nouveaux tests (sourceRevenus manquante/déclarée) + 4 appels mis à jour (nouveau paramètre) |
+
+## 3.5 Code clé
+
+### a. Contrôle ADMIN au LEVEL_3 — `CustomerController.updateKyc`
+
+```java
+// RG-KYC-02 : « LEVEL_3 (justificatif de domicile + source de revenus
+// déclarée) est validé par un ADMIN » — le TELLER est validé à
+// LEVEL_2 seul, l'escalade à LEVEL_3 demande le rôle ADMIN.
+if (request.kycLevel() == KycLevel.LEVEL_3 && !hasAuthority(Role.ADMIN)) {
+    throw new FinCoreException(ErrorCode.ACCESS_DENIED,
+            "Seul un ADMIN peut atteindre le LEVEL_3 (RG-KYC-02).");
+}
+```
+
+### b. Vérification RG-KYC-02 — `CustomerService.updateKyc`
+
+```java
+if (request.kycLevel() == KycLevel.LEVEL_3
+        && (request.sourceRevenus() == null || request.sourceRevenus().isBlank())) {
+    throw new FinCoreException(ErrorCode.VALIDATION_FAILED,
+            "Le passage au niveau LEVEL_3 requiert une source de revenus déclarée.",
+            Map.of("errors", Map.of("sourceRevenus", "obligatoire")));
+}
+```
+
+## 3.6 Comment vérifier
+
+- `./mvnw verify` → `Tests run: 64, Failures: 0` — inclut :
+  - `KycEndpointTest.teller_cannot_reach_level_3` : TELLER + LEVEL_3 → **403** `ACCESS_DENIED` (preuve HTTP de RG-KYC-02) ;
+  - `KycEndpointTest.admin_reaches_level_3_with_declared_source_of_revenue` : ADMIN + LEVEL_3 + `sourceRevenus` → **200**, `idDocNumberMasked == ****6789`, **aucun numéro clair dans la réponse** (CA-KYC-01) ;
+  - `KycEndpointTest.admin_level_3_requires_declared_source_of_revenue` : ADMIN sans `sourceRevenus` → **400** `VALIDATION_FAILED` + `errors.sourceRevenus` non vide.
+- Commandes manuelles (live) : inscription `POST /api/v1/auth/register` (201) → login → `PATCH /api/v1/customers/{id}/kyc` (TELLER → 403, ADMIN avec `sourceRevenus` → 200).
+
+## 3.7 Pièges rencontrés
+
+- **P3-2** : avant complémentation, rien ne refusait au TELLER de monter en LEVEL_3 — règle implicite dans la javadoc de `KycLevel` — le test 403 rend la règle explicite.
+- **P3-3 (mutation)** : suppression du bloc ADMIN du contrôleur → `teller_cannot_reach_level_3` rouge (200 au lieu de 403) → rétablir : le test d'entraînement prouve l'implémentation.
+
+## 3.8 Questions d'entretien — Phase 3
+
+**Q1. À quoi sert `app_user` par rapport à `customer` ?** — session vs métier — FK UNIQUE `user_id` — deux collapsed templates PHP/Symfony.
+
+**Q2. Comment représenter un énuméré fermé statut (PENDING/VERIFIED/REJECTED) ?** — Énuméré Java `@Enumerated(EnumType.STRING)` + `CHECK` PostgreSQL (évoluable par migration — jamais modifier V3 commitée).
+
+**Q3. Comment faire atomique une montée de niveau (RG-KYC-02 à 05) ?** — `@Transactional` sur `CustomerService.updateKyc` (§2.2 Phase 0) — équivalent du `@Transactional` sur `AuthService` (Phase 2).
+
+**Q4. Comment distinguer « majeur → LEVEL_2 (TELLER/ADMIN) » de « LEVEL_3 = ADMIN seul » ? (RG-KYC-02)** — LEVEL_2 = « assisté à un agent de guichet » vs LEVEL_3 = « déclaration d'activité représentée » — Level-3 nécessite un représentant ADMIN.
+
+**Q5. Pourquoi le numéro d'identification n'est-il jamais stocké en clair (CA-KYC-01) ?** — SEUL `id_doc_number_masked` en base (V3) ; hash SHA-256 dans `maskIdDoc` est transitoire (`@Transient`) — un dump PostgreSQL ne révèle rien.
+
+## 3.9 Exercice pour l'apprentissage
+
+1. **Échouer volontairement en local** : démarre l'app (Phase 0), `PATCH /api/v1/customers/{id}/kyc` en TELLER → observe le **403** — rejoue en ADMIN avec `sourceRevenus` → observe le **200** — redécouvre la règle de la §5 + RG-KYC-02 sans briser le code.
+2. **Découvrir le type JUnit** : `./mvnw verify -Dtest=KycEndpointTest` → **9 tests verts** dans `target/surefire-reports/com.wince.fincore.customer.api.KycEndpointTest.txt` — grep `Tests run:`.
+3. **Ajoute-toi un test** : un `AUDITOR` tente le PATCH — la matrice §5 ne donne aucun droit PATCH à l'AUDITOR — écris ton test (401 sans jeton, 403 avec jeton AUDITOR — même pattern que `matrice_des_droits_admin_autorise` de Phase 2), relance `./mvnw verify`.
+4. **Mutation pédagogique (aucun commit)** : supprime le bloc ADMIN du contrôleur → relance `./mvnw verify` → `teller_cannot_reach_level_3` rouge (200 au lieu de 403) → rétablis le bloc.
+
+---
+
+# PHASE 4 — F-03 : Comptes + numéro de compte modulo 97 + comptes système + seed — ✅ FAIT
+
+> **Statut : FAIT — suite verte.** `Tests run: 107, Failures: 0, Errors: 0, Skipped: 0` (43 nouveaux vs Phase 3 — 107 − 64), `BUILD SUCCESS` (23/11/2026).
+> Tests : `AccountEndpointTest` 19, `AccountServiceTest` 19, `AccountNumberGeneratorTest` 5.
+> Detail file-level : `detail_projet/phase4.md`.
+
+## 4.1 Objectif de la phase (3 lignes)
+
+1. Introduire l'entité **compte client** (`account`) — devises `XOF`/`EUR`/`USD` — numéro BEN unique — statuts `ACTIVE`/`FROZEN`/`CLOSED` — RG-ACC-01 à 04.
+2. Générer et valider les numéros de compte — clé mod 97 sur 10 chiffres — pré-contrôle bénéficiaire — RG-ACC-03 — §8 — CA-ACC-01.
+3. Créer les comptes systèmes (`CASH_VAULT`, `FEE_REVENUE`, `FX_POSITION`, `EXTERNAL_SETTLEMENT`, `SUSPENSE`, `INTEREST_EXPENSE` — 6 × 3 devises) au démarrage — migration + seed — RG-ACC-06.
+
+## 4.2 Notions à comprendre
+
+- **`VARCHAR` + `CHECK` — enuméré fermé dans la base** — équivalent de V3 — ajouter un niveau = constante + nouveau CHECK + nouveau déploiement — Pattern de `KycLevel` (Phase 3) — `AccountKind`, `SystemCode`, `AccountStatus`.
+- **Mod 97 — `BigInteger`, pas `int`** — 10 chiffres peuvent dépasser `Integer.MAX_VALUE` — `AccountNumberGeneratorTest.check_key_convention_on_generated_example` — echo BCMath (`bcdiv`/`bcmod`) — Phase 5 (F-04 — RG-LED-06) — nettoyage verrou.
+- **`Account.customerId` vs `AppUser.id`** — lien session/métier — resolveur `currentCustomerId()` — voir 4.5c.
+- **`AccountNumberGenerator` — pure function** — `generate()`/`isValid()` — « validation de la clé à chaque saisie d'un numéro de bénéficiaire » (RG-ACC-03) — consommé par `AccountService.lookupBeneficiary` (`GET /accounts/lookup` — §8 — F-06).
+- **Piège P4-1** : `Account.currency` — Hibernate 6 mappe les enums à `smallint` par défaut — conflit avec la colonne `VARCHAR(3)` — `SchemaManagementException` — « expecting [smallint (TINYINT)] » — voir 4.7.
+
+## 4.3 Commandes exécutées
+
+| Commande | Ce qu'elle fait | Pourquoi l'avoir lancée | Importance |
+|---|---|---|---|
+| `./mvnw verify` | Compile + exécute toutes les suites (unitaires + d'intégration Testcontainers) | `Tests run: 107, Failures: 0, Errors: 0, Skipped: 0` + `BUILD SUCCESS` — preuve par HTTP/SQL de CA-ACC-01/02 + RG-ACC-06 | ✅ CRITIQUE |
+| `git status --short` | État de l'arborescence (7 fichiers modifiés) | Préparation aux commits par l'auteur | Importante |
+
+## 4.4 Fichiers créés ou modifiés
+
+| Fichier | Rôle |
+|---|---|
+| `src/main/java/com/wince/fincore/account/domain/Account.java` | Entity `account` — §6.1 — `currency` `@Enumerated(EnumType.STRING)` |
+| `src/main/java/com/wince/fincore/account/domain/AccountKind.java` | `CURRENT, SAVINGS, WALLET, SYSTEM` — §6.1, RG-ACC-01 |
+| `src/main/java/com/wince/fincore/account/domain/SystemCode.java` | `CASH_VAULT, FEE_REVENUE, FX_POSITION, EXTERNAL_SETTLEMENT, SUSPENSE, INTEREST_EXPENSE` — RG-ACC-06 |
+| `src/main/java/com/wince/fincore/account/domain/AccountStatus.java` | `ACTIVE, FROZEN, CLOSED` — RG-ACC-04 |
+| `src/main/java/com/wince/fincore/account/repository/AccountRepository.java` | `findByCustomerIdAndKindAndCurrency`, `findByAccountNumber`, `existsByAccountNumber`, `findByCustomerId`, `findAllBySystemCode` |
+| `src/main/java/com/wince/fincore/account/application/AccountNumberGenerator.java` | Génération — `SecureRandom`, 10 chiffres (1er non nul) + clé — convention ICC — pure function |
+| `src/main/java/com/wince/fincore/account/application/AccountService.java` | §8 — `open`, `findByCustomerId`, `findById` (CA-ACC-02), `changeStatus` (RG-ACC-04/05), `lookupBeneficiary` (pré-contrôle — RG-ACC-03, F-06) |
+| `src/main/java/com/wince/fincore/account/api/AccountController.java` | §8 — `POST /accounts` (201 — pattern AuthController), `GET /accounts`, `GET /accounts/{id}`, `GET /accounts/lookup`, `PATCH /accounts/{id}/status` — DTO `@Valid` |
+| `src/main/java/com/wince/fincore/account/api/OpenAccountRequest.java` | DTO POST — `currency` NULL → XOF — RG-ACC-01 |
+| `src/main/java/com/wince/fincore/account/api/AccountStatusUpdateRequest.java` | DTO PATCH — `status` obligatoire — `motif` obligatoire FROZEN/CLOSED (F-13) |
+| `src/main/java/com/wince/fincore/account/api/AccountResponse.java` | DTO de réponse — miroir `account` |
+| `src/main/java/com/wince/fincore/account/api/AccountLookupResponse.java` | Pré-contrôle — `maskedName` — « J*** D*** » — F-06 — CA-KYC-01 |
+| `src/main/java/com/wince/fincore/customer/domain/Customer.java` | **Modifié** : `setKycStatus(KycStatus)` — Phase 3 → 4 — RG-ACC-02 — vérifiée via `open_account_for_rejected_customer_400` |
+| `src/main/resources/db/migration/V4__create_account.sql` | Migration — `CREATE TABLE account` + CHECKs + UQ partiel + **seed des comptes systèmes** (6 × 3 devises) — RG-ACC-06 |
+| `src/test/java/com/wince/fincore/account/application/AccountNumberGeneratorTest.java` | Unit — CA-ACC-01 — convention mod 97 — distinctness 100 |
+| `src/test/java/com/wince/fincore/account/application/AccountServiceTest.java` | Unit — `open`, `findById` (CA-ACC-02), `changeStatus`, `lookupBeneficiary` |
+| `src/test/java/com/wince/fincore/account/api/AccountEndpointTest.java` | Intégration — 19 tests — §5 — CA-ACC-01/02 — RG-ACC-06 — PostgreSQL réel (Testcontainers) |
+
+## 4.5 Code clé
+
+### a. Génération et validation — `AccountNumberGenerator` (RG-ACC-03)
+
+```java
+public static String generate() {
+    String body = generateBody();                    // 10 chiffres — 1er non nul
+    return PREFIX + body + String.format("%02d", checkKey(body));
+}
+
+private static int checkKey(String body) {
+    return MOD - new BigInteger(body).mod(BigInteger.valueOf(MOD)).intValue();  // 97 − (n mod 97) — borne 1..97
+}
+
+public static boolean isValid(String accountNumber) {
+    // préfixe BJ, longueur 14, body \d{10}, clé \d{2} — clé == 97 − (n mod 97)
+}
+```
+
+**Piège P4-2** : le changement de convention de la clé — éviter `97 - mod` qui peut donner `0` — la convention ICC donne 97 — ici la borne est 1..97 — vérifiée dans le test.
+
+### b. Ouverture — `AccountService.open`
+
+```java
+Customer customer = customerRepository.findById(request.customerId()).orElseThrow(...);
+if (customer.getKycStatus() == KycStatus.REJECTED) {
+    throw new FinCoreException(ErrorCode.VALIDATION_FAILED, "...");   // RG-ACC-02 — Phase 3 — Customer.setKycStatus
+}
+if (accountRepository.findByCustomerIdAndKindAndCurrency(id, kind, currency).isPresent()) {
+    throw new FinCoreException(ErrorCode.VALIDATION_FAILED, "...");   // RG-ACC-02 — un seul compte par (type, devise)
+}
+Account account = new Account(UUID.randomUUID(), generateUniqueAccountNumber(),
+        request.customerId(), request.kind(), null, currency, Money.zero(currency).amount());
+account.setOpenedAt(clock.instant());
+return accountRepository.save(account);
+```
+
+### c. 404 — CA-ACC-02 — `AccountService.findById`
+
+```java
+if (role == Role.CUSTOMER
+        && (account.isSystem() || currentCustomerId == null
+                || account.getCustomerId() == null
+                || !account.getCustomerId().equals(currentCustomerId))) {
+    throw new FinCoreException(ErrorCode.RESOURCE_NOT_FOUND, "Compte introuvable.");
+}
+```
+
+- `currentCustomerId` = id du `Customer` lié à l'AppUser — `customerRepository.findByUserId(userId).map(Customer::getId)` — `userId` = `currentUserId()` (claim `sub` du JWT — RG-AUTH-06) — null si l'ADMIN n'a pas de Customer — `Account.customer_id` → `customer.id` (§6.1).
+
+### d. Seed — `V4__create_account.sql` (RG-ACC-06)
+
+```sql
+WITH pairs(code, kind, ccy) AS (VALUES (…18 tuples…)),
+gen AS (SELECT code, kind, ccy, floor(random() * 9000000000 + 1000000000)::bigint AS body FROM pairs)
+INSERT INTO account (id, account_number, kind, system_code, currency, status, balance, version, opened_at)
+SELECT gen_random_uuid(),
+       'BJ' || lpad(body::text, 10, '0') || lpad((97 - (body % 97::bigint))::text, 2, '0'),
+       kind, code, ccy, 'ACTIVE', 0, 0, now()
+FROM gen;
+```
+
+- **Convention** : clé SQL = `97 − (n % 97)` — compatible `AccountNumberGenerator.checkKey` — vérifiable via `AccountEndpointTest.system_accounts_are_seeded_at_startup` — `isValid` sur chaque ligne seedée —echo RG-ACC-06.
+
+## 4.6 Comment vérifier
+
+- **Suite complète** : `./mvnw verify` → `Tests run: 107, Failures: 0, Errors: 0` — inclut :
+  - `AccountEndpointTest.teller_opens_account_201` : TELLER + `POST /accounts` → 201 — `id`, `accountNumber` valide, `status=ACTIVE`, `currency=XOF`, `customerId`, line persistée — CA-ACC-02 via `customer_cannot_read_others_account_404` (404 pour un autre client) ;
+  - `AccountEndpointTest.system_accounts_are_seeded_at_startup` : 6 comptes systèmes — `Account::isSystem`, `customerId NULL`, `status ACTIVE`, `isValid` — RG-ACC-06 — seed en migration ;
+  - `AccountEndpointTest.admin_cannot_freeze_system_account_409` : statut système immutable — 409 — RG-ACC-06 ;
+  - `AccountEndpointTest.admin_cannot_close_account_with_nonzero_balance_409` : solde non nul — 409 — RG-ACC-05.
+- **Manuel (live)** : `curl.exe -X POST -H "Authorization: Bearer <ADMIN>" -H "Content-Type: application/json" http://localhost:8080/api/v1/accounts -d '{"customerId":"…","kind":"WALLET","currency":"EUR"}'` → 201 Created — contradiction ?— non — 201 attendu — pattern Phase 2.
+- **Base** : `SELECT account_number, kind, currency, balance FROM account WHERE customer_id IS NULL;` → 18 lignes — comptes systèmes — validation : `SELECT account_number FROM account WHERE length(account_number) <> 14 OR substring(account_number, 1, 2) <> 'BJ';` → vide.
+
+## 4.7 Pièges rencontrés
+
+1. **P4-1 — `Schema validation: wrong column type in column [currency]; found [varchar], expecting [smallint (TINYINT)]`** — `Account.currency` est un `enum` JPA — JPA mappe les enums à `int` par défaut (`@Enumerated` absent) — conflit avec la colonne `VARCHAR(3)` — ajout de `@Enumerated(EnumType.STRING)` — piège pédagogique Phase 1 (`Currency` dans `Money`).
+2. **P4-2 — `Status expected:<201> but was:<200>`** — `@PostMapping` — 200 — pattern `AuthController.register` — `ResponseEntity.status(HttpStatus.CREATED).body(...)` — Phase 2 — `AccountController.open` — POST = création — 201.
+3. **Piège méta — diagnostique difficile : `No enum constant com.wince.fincore.identity.domain.Role.R_BEARER` → 500** — sur `GET /accounts/{id}` par ADMIN — `currentRole()` manipule désormais le claim du JWT — `Role.valueOf(jwt.getClaimAsString("role"))` — RG-AUTH-06 — plus robuste que la manipulation des autorités Spring Security 7 — vérifiable via `admin_reads_account_detail_200`.
+4. **Mutation test pédagogique (aucun commit)** : supprime localement le bloc REJECTED de `AccountService.open` — `AccountEndpointTest.open_account_for_rejected_customer_400` rouge — rétabris.
+
+## 4.8 Questions d'entretien — Phase 4
+
+**Q1. Comment calculer une clé de contrôle modulo 97 sans perdre en précision ?** — `String body` → `new BigInteger(body)` → `.mod(BigInteger.valueOf(97))` → `97 − r` — borne 1..97 — éviter `int` (jusqu'à 9 999 999 999 — jusque `Integer.MAX_VALUE` = 2 147 483 647 — voir `AccountNumberGeneratorTest`) — BCMath (`bcsub`, `bcmod`) — Phase 5.
+
+**Q2. Comment représenter un numéro de 10 chiffres ?** — `String` — validation à l'API — pré-contrôle — 400 `INVALID_ACCOUNT_NUMBER` — RG-ACC-03 — `GET /accounts/lookup?number=…` (§8 — F-06).
+
+**Q3. Comment représenter un solde dans l'API ? (§6.1 — `balance NUMERIC`)** — `AccountResponse.balance` est un `BigDecimal` — l'échelle de la devise — `Money` — 0 XOF — 2 EUR/USD — sérialisé en JSON (`0`, `12.34`) — suivi — `spring.jackson.default-property-inclusion: non_null` — Phase 5.
+
+**Q4. Comment implémenter « un seul compte par (type, devise) » — RG-ACC-02 ?** — Backstop SQL — UQ partiel — `CREATE UNIQUE INDEX uq_account_customer_kind_currency ON account (customer_id, kind, currency) WHERE customer_id IS NOT NULL` — pourquoi PARTIEL — NULL ≠ NULL — Backstop Java — `AccountService.open` — `findByCustomerIdAndKindAndCurrency(...).isPresent()` → 400 — Client REJECTED — `KycStatus.REJECTED` — Phase 3 — `Customer.setKycStatus`.
+
+**Q5. À quoi sert la colonne `version` (§6.1) — Phase 4 ?** — BIGINT — présent, stocké — pas encore utilisé — Phase 5 (F-04 — RG-LED-06) — nettoyage verrou — Pattern pédagogique (Phase 0/2 — §6.2 — « verrou optimiste JPA »).
+
+## 4.9 Exercice pour l'apprentissage
+
+1. **Découvrir le flux** : `./mvnw verify -Dtest=AccountEndpointTest#teller_opens_account_201` — 1 test vert — injecter un `System.out.println` dans `AccountService.open` — observer — supprimer.
+2. **Mutation test (aucun commit)** : supprime localement le bloc REJECTED de `AccountService.open` — relance `./mvnw verify` — `AccountEndpointTest.open_account_for_rejected_customer_400` rouge — rétabris.
+3. **Remarque pédagogique** : le mod 97 — `AccountNumberGeneratorTest` — convention écrite en SQL (`V4`) et reproduite en Java (`AccountNumberGenerator.checkKey`) — difficile à tromper — vérifiable via `AccountEndpointTest.system_accounts_are_seeded_at_startup` — `isValid(numéro)` sur chaque ligne seedée.

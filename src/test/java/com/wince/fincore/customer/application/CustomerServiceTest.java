@@ -96,7 +96,7 @@ class CustomerServiceTest {
         when(customerRepository.findById(customerId)).thenReturn(Optional.of(minor));
 
         assertThatThrownBy(() -> service.updateKyc(customerId,
-                        new KycUpdateRequest(KycLevel.LEVEL_2, IdDocType.ID_CARD, "0123456789")))
+                        new KycUpdateRequest(KycLevel.LEVEL_2, IdDocType.ID_CARD, "0123456789", null)))
                 .isInstanceOf(FinCoreException.class)
                 .satisfies(ex -> assertThat(((FinCoreException) ex).errorCode())
                         .isEqualTo(ErrorCode.CUSTOMER_UNDERAGE));
@@ -112,7 +112,7 @@ class CustomerServiceTest {
                 "Jean", "Bon", LocalDate.of(2008, 5, 10), "0612345678");
         when(customerRepository.findById(customerId)).thenReturn(Optional.of(customer));
 
-        assertThatThrownBy(() -> service.updateKyc(customerId, new KycUpdateRequest(KycLevel.LEVEL_2, null, null)))
+        assertThatThrownBy(() -> service.updateKyc(customerId, new KycUpdateRequest(KycLevel.LEVEL_2, null, null, null)))
                 .isInstanceOf(FinCoreException.class)
                 .satisfies(ex -> assertThat(((FinCoreException) ex).errorCode())
                         .isEqualTo(ErrorCode.VALIDATION_FAILED));
@@ -129,11 +129,43 @@ class CustomerServiceTest {
         when(customerRepository.findById(customerId)).thenReturn(Optional.of(customer));
 
         Customer updated = service.updateKyc(customerId,
-                new KycUpdateRequest(KycLevel.LEVEL_2, IdDocType.ID_CARD, "0123456789"));
+                new KycUpdateRequest(KycLevel.LEVEL_2, IdDocType.ID_CARD, "0123456789", null));
 
         assertThat(updated.getKycLevel()).isEqualTo(KycLevel.LEVEL_2);
         assertThat(updated.getIdDocNumberMasked()).isEqualTo("****6789");
         assertThat(updated.getIdDocNumber()).isNotEqualTo("0123456789");
+    }
+
+    // ── LEVEL_3 — RG-KYC-02 (source de revenus déclarée) ─────────────────
+
+    @Test
+    @DisplayName("RG-KYC-02 : LEVEL_3 sans source de revenus → 400 VALIDATION_FAILED (errors.sourceRevenus)")
+    void level_3_without_source_of_revenue_is_rejected() {
+        UUID customerId = UUID.randomUUID();
+        Customer customer = new Customer(customerId, UUID.randomUUID(),
+                "Jean", "Bon", LocalDate.of(2008, 5, 10), "0612345678");
+        when(customerRepository.findById(customerId)).thenReturn(Optional.of(customer));
+
+        assertThatThrownBy(() -> service.updateKyc(customerId,
+                        new KycUpdateRequest(KycLevel.LEVEL_3, IdDocType.ID_CARD, "0123456789", null)))
+                .isInstanceOf(FinCoreException.class)
+                .satisfies(ex -> assertThat(((FinCoreException) ex).errorCode())
+                        .isEqualTo(ErrorCode.VALIDATION_FAILED));
+    }
+
+    @Test
+    @DisplayName("RG-KYC-02 : LEVEL_3 avec source de revenus → montée acceptée, numéro masqué (CA-KYC-01)")
+    void level_3_with_declared_source_of_revenue_is_accepted() {
+        UUID customerId = UUID.randomUUID();
+        Customer customer = new Customer(customerId, UUID.randomUUID(),
+                "Jean", "Bon", LocalDate.of(2008, 5, 10), "0612345678");
+        when(customerRepository.findById(customerId)).thenReturn(Optional.of(customer));
+
+        Customer updated = service.updateKyc(customerId,
+                new KycUpdateRequest(KycLevel.LEVEL_3, IdDocType.ID_CARD, "0123456789", "Emploi salarié"));
+
+        assertThat(updated.getKycLevel()).isEqualTo(KycLevel.LEVEL_3);
+        assertThat(updated.getIdDocNumberMasked()).isEqualTo("****6789");
     }
 
     // ── 404 — §5 ─────────────────────────────────────────────────────────
@@ -144,7 +176,7 @@ class CustomerServiceTest {
         UUID customerId = UUID.randomUUID();
         when(customerRepository.findById(customerId)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.updateKyc(customerId, new KycUpdateRequest(KycLevel.LEVEL_1, null, null)))
+        assertThatThrownBy(() -> service.updateKyc(customerId, new KycUpdateRequest(KycLevel.LEVEL_1, null, null, null)))
                 .isInstanceOf(FinCoreException.class)
                 .satisfies(ex -> assertThat(((FinCoreException) ex).errorCode())
                         .isEqualTo(ErrorCode.RESOURCE_NOT_FOUND));
