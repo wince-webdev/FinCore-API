@@ -10,43 +10,70 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.MediaType;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.access.AccessDeniedHandler;
 
 /**
- * Chaîne de sécurité transverse — <strong>phase 1</strong> : uniquement le
- * nécessaire pour servir Swagger UI et la santé Docker.
+ * Chaîne de sécurité transverse — <strong>phase 2</strong> : la seule
+ * chaîne de l'application, stateless, qui valide les JWT et arbitre les rôles.
  *
- * <p><strong>Règle d'or : refuser par défaut.</strong> Spring Security
- * bloque déjà tout (api-docs répondait 401 avant cette classe) ; ici on
- * ouvre <em>ponctuellement</em> les ressources publiques du §12.3 :</p>
+ * <p><strong>Règle d'or : refuser par défaut.</strong> On ouvre
+ * <em>ponctuellement</em> les ressources publiques du §12.3 :</p>
  * <ul>
  *   <li>{@code /actuator/health*} — indispensable au HEALTHCHECK Docker,
  *       sans authentification (un moniteur ne possède pas de jeton) ;</li>
  *   <li>{@code /api-docs/**} + {@code /swagger-ui/**} — contrat OpenAPI,
  *       ouvert en dev uniquement ;</li>
+ *   <li>{@code POST /auth/register}, {@code /login}, {@code /refresh} —
+ *       c'est précisément l'endroit où l'on obtient un jeton, le protéger
+ *       serait une impasse ; {@code /logout}, lui, exige un jeton ;</li>
  *   <li>tout le reste → {@code authenticated()} : sans jeton = 401, jamais
  *       de page « 403 silencieuse » (CA-AUTH-04).</li>
  * </ul>
  *
- * <p><strong>Phase 2</strong> : cette classe sera étendue (JWT resource
- * server, contrôle d'accès par rôle CUSTOMER/AGENT/OPS/AUDITOR, jeton
- * révoqué…). Elle vit déjà dans {@code shared} car elle ne dépend d'aucun
- * métier ; le module {@code identity} y ajoutera son authenticateur.</p>
+ * <p><strong>Phase 2</strong> : le <em>resource server</em> JWT est branché
+ * ici ({@code oauth2ResourceServer}), mais les beans qu'il faut — le
+ * {@code JwtDecoder} et le convertisseur du claim {@code role} — sont
+ * publiés par le module {@code identity}
+ * ({@code IdentitySecurityConfig}), seul à connaître le secret et le
+ * contrat de jetons.</p>
  *
  * <p>Équivalent Symfony : la classe {@code SecurityBundle} + les
  * {@code access_control} du {@code security.yaml}.</p>
  */
 @Configuration
 @EnableWebSecurity
+// @PreAuthorize("hasRole(...)") : indispensable pour la matrice des droits
+// (§5) — testée dès la phase 2 et réutilisée sur les endpoints /admin/**.
+@EnableMethodSecurity
 public class SecurityConfig {
 
     /** Ordre explicite : cette chaîne « basique » passe avant toute autre. */
     public static final int CHAIN_ORDER = 0;
+
+    /**
+     * Hachage des mots de passe — RG-AUTH-01 : BCrypt coût 12.
+     *
+     * <p>Le coût n'est pas un détail : chaque vérification coûte ~250 ms,
+     * ce qui rend une attaque par force brute <em>patiente</em> (≈ 4 essais
+     * par seconde et par cœur de CPU). Baisser le coût à 4 pour « gagner
+     * du temps » en test reviendrait à tester autre chose que la prod.</p>
+     *
+     * <p>Équivalent Symfony : {@code security.password_hashers} avec
+     * {@code cost: 12}.</p>
+     */
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder(12);
+    }
 
     @Bean
     @Order(CHAIN_ORDER)
@@ -71,14 +98,34 @@ public class SecurityConfig {
                                 "/swagger-ui/**",
                                 "/swagger-ui.html")
                         .permitAll()
-                        // Tout le reste exige un jeton (phase 2 : JWT).
+                        // F-01 : les trois endpoints qui DÉLIVRENT un jeton
+                        // sont publics (RG-AUTH-02/03). /auth/logout n'est
+                        // pas dans la liste : il exige un jeton valide,
+                        // comme les 4 autres rôles du catalogue §8.
+                        .requestMatchers(
+                                "/api/v1/auth/register",
+                                "/api/v1/auth/login",
+                                "/api/v1/auth/refresh")
+                        .permitAll()
+                        // Tout le reste exige un jeton valide (phase 2 : JWT).
                         .anyRequest().authenticated())
                 .exceptionHandling(handling -> handling
                         // CA-AUTH-04 : sans jeton → 401 (et pas 403 « silencieux »),
                         // avec le même corps RFC 9457 que GlobalExceptionHandler.
                         .authenticationEntryPoint(unauthenticatedEntryPoint())
-                        // Jeton valide mais rôle insuffisant → 403.
-                        .accessDeniedHandler(accessDeniedHandler()));
+                        // Jeton valide mais droits insuffisants → 403.
+                        .accessDeniedHandler(accessDeniedHandler()))
+                // Resource server JWT : le JwtDecoder et le convertisseur du
+                // claim « role » sont découverts dans le contexte (beans
+                // publiés par identity/IdentitySecurityConfig).
+                // Piège Spring Security 7 : la simple présence d'un bean
+                // JwtDecoder ne suffit plus — il faut déclarer explicitement
+                // le format des jetons, sinon le build échoue avec
+                // « Jwt and Opaque Token are the only supported formats ».
+                .oauth2ResourceServer(oauth2 -> oauth2
+                        .authenticationEntryPoint(unauthenticatedEntryPoint())
+                        .accessDeniedHandler(accessDeniedHandler())
+                        .jwt(Customizer.withDefaults()));
         return http.build();
     }
 
