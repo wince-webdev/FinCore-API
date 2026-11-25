@@ -7,6 +7,14 @@ spring:
   application:
     name: FinCore
 
+  # Charge le fichier local `.env` (ignoré par Git) comme source de
+  # propriétés : FINCORE_JWT_SECRET, FINCORE_DB_*, POSTGRES_*.
+  # `optional:` = pas d'échec si le fichier est absent (CI, prod avec
+  # vraies variables d'environnement). Format KEY=value compatible
+  # Java properties.
+  config:
+    import: optional:file:.env[.properties]
+
   # Profil actif par défaut : dev. On le surcharge avec
   # `--spring.profiles.active=prod` ou SPRING_PROFILES_ACTIVE=prod.
   profiles:
@@ -70,11 +78,10 @@ fincore:
     # Secret de signature HS256 (RG-AUTH-06) : ≥ 256 bits = 32 octets.
     # Lu par JETEUR (JwtService) et VÉRIFICATEUR (JwtDecoder) — une seule
     # propriété, donc une seule source de vérité pour la clé.
-    # La valeur par défaut ci-dessous est VOLONTAIREMENT un identifiant de
-    # secours « dev only » : le profil prod ne la redéfinit PAS, donc
-    # ${FINCORE_JWT_SECRET} sans valeur de repli → échec net au démarrage
-    # plutôt qu'un secret faible en production (règle §2.3 « secrets hors code »).
-    jwt-secret: ${FINCORE_JWT_SECRET:dev-SECRET-a-ne-jamais-utiliser-hors-local-0123456789}
+    # AUCUNE valeur de repli en dur (règle §2.3 « secrets hors code ») :
+    # la clé vit dans `.env` local (non poussé) ou dans les variables
+    # d'environnement de production. Sans elle → échec net au démarrage.
+    jwt-secret: ${FINCORE_JWT_SECRET}
     access-ttl-minutes: 15 # RG-AUTH-03 : access token 15 min
     refresh-ttl-days: 7 # RG-AUTH-03 : refresh token 7 jours
     max-failed-attempts: 5 # RG-AUTH-05 : verrouillage après 5 échecs
@@ -155,7 +162,7 @@ springdoc:
 
 # En prod, AUCUNE valeur de repli : si FINCORE_JWT_SECRET n'est pas défini,
 # le placeholder explose au démarrage — on préfère refuser de servir plutôt
-# que de signer les jetons avec le secret « dev ».
+# que de signer les jetons sans clé (ou avec une clé laissée en clair).
 fincore:
   security:
     jwt-secret: ${FINCORE_JWT_SECRET}
