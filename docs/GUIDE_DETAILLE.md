@@ -1054,3 +1054,44 @@ FROM gen;
 1. **Découvrir le flux** : `./mvnw verify -Dtest=AccountEndpointTest#teller_opens_account_201` — 1 test vert — injecter un `System.out.println` dans `AccountService.open` — observer — supprimer.
 2. **Mutation test (aucun commit)** : supprime localement le bloc REJECTED de `AccountService.open` — relance `./mvnw verify` — `AccountEndpointTest.open_account_for_rejected_customer_400` rouge — rétabris.
 3. **Remarque pédagogique** : le mod 97 — `AccountNumberGeneratorTest` — convention écrite en SQL (`V4`) et reproduite en Java (`AccountNumberGenerator.checkKey`) — difficile à tromper — vérifiable via `AccountEndpointTest.system_accounts_are_seeded_at_startup` — `isValid(numéro)` sur chaque ligne seedée.
+
+# PHASE 8 - Virements externes asynchrones + outbox + notifications - FAIT
+
+## 8.1 Objectif
+Virements vers un operateur externe (mobile money/banque) en asynchrone : creation PENDING, traitement par scheduler, machine a etats, remboursement en cas d echec, outbox transactionnelle et notifications.
+
+## 8.2 Notions a comprendre
+- Outbox pattern : ecrire l evenement dans la meme transaction que le metier, puis un dispatcher l envoie. Evite la perte de message si le commit reussit mais la notification echoue.
+- Machine a etats : PENDING -> COMPLETED|FAILED ; COMPLETED -> REVERSED. Toute autre transition = ILLEGAL_STATE_TRANSITION.
+- Scheduler Spring : @Scheduled + @EnableScheduling = tache periodique (equivalent cron Symfony).
+- Port/Adapter : interface ExternalPaymentProvider implementee par un adaptateur simule (latence, succes/echec). Testable avec mode deterministe.
+
+## 8.3 Commandes exécutées
+| Commande | Role |
+|---|---|
+| `./mvnw verify` | Compile + tests (Flyway V8 applique via Testcontainers) |
+| `./mvnw -o verify` | Mode hors-ligne apres premier build |
+
+## 8.4 Fichiers crees/modifies
+- `V8__phase8_outbox.sql` : table outbox_event.
+- `OutboxEvent.java`, `OutboxEventRepository.java`
+- `ExternalPaymentProvider.java`, `SimulatedExternalPaymentProvider.java`
+- `NotificationGateway.java`, `SimulatedNotificationGateway.java`
+- `ExternalTransferService.java`, `ExternalTransferController.java`
+- `OutboxDispatcher.java`
+- `FinCoreApplication.java` : @EnableScheduling
+
+## 8.5 Verification
+- POST /api/v1/transfers/external avec Idempotency-Key -> 201 PENDING.
+- Le scheduler traite (mode deterministe via fincore.external.mode=failure) -> FAILED + remboursement, soldes equilibres.
+
+## 8.6 Pieges
+- ObjectMapper Boot 4 = tools.jackson, pas com.fasterxml.
+- \n litteraux dans les fichiers generes par script -> erreur de compilation. Toujours verifier.
+
+## 8.7 Questions d entretien
+1. Pourquoi l outbox plutot qu envoyer la notification dans la transaction metier ? Pour ne pas bloquer le commit si la passerelle est indisponible.
+2. Comment rendre le provider deterministe en test ? Parametre fincore.external.mode.
+
+## 8.8 Exercice
+Ajouter un mode `success` et verifier qu un virement externe passe en COMPLETED avec EXTERNAL_SETTLEMENT credite.
