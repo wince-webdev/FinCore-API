@@ -15,6 +15,7 @@ import com.wince.fincore.account.domain.SystemCode;
 import com.wince.fincore.account.repository.AccountRepository;
 import com.wince.fincore.ledger.application.LedgerService;
 import com.wince.fincore.ledger.domain.Direction;
+import jakarta.persistence.EntityManager;
 import com.wince.fincore.ledger.domain.FinancialTransaction;
 import com.wince.fincore.ledger.domain.TransactionType;
 import com.wince.fincore.payment.api.WithdrawalCommand;
@@ -46,12 +47,14 @@ class WithdrawalServiceTest {
     private AccountRepository accountRepository;
     @Mock
     private LedgerService ledgerService;
+    @Mock
+    private EntityManager entityManager;
 
     private WithdrawalService service;
 
     @BeforeEach
     void setUp() {
-        service = new WithdrawalService(accountRepository, ledgerService);
+        service = new WithdrawalService(accountRepository, ledgerService, entityManager);
     }
 
     private static Account account(UUID id, AccountStatus status, BigDecimal balance) {
@@ -67,7 +70,6 @@ class WithdrawalServiceTest {
         Account cashVault = account(UUID.randomUUID(), AccountStatus.ACTIVE, BigDecimal.ZERO);
         Account feeRevenue = account(UUID.randomUUID(), AccountStatus.ACTIVE, BigDecimal.ZERO);
         when(accountRepository.findById(account.getId())).thenReturn(Optional.of(account));
-        when(accountRepository.findForUpdate(account.getId())).thenReturn(Optional.of(account));
         when(accountRepository.findBySystemCodeAndCurrency(SystemCode.CASH_VAULT, Currency.XOF)).thenReturn(Optional.of(cashVault));
         when(accountRepository.findBySystemCodeAndCurrency(SystemCode.FEE_REVENUE, Currency.XOF)).thenReturn(Optional.of(feeRevenue));
         when(ledgerService.apply(any(FinancialTransaction.class), any(List.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -96,7 +98,6 @@ class WithdrawalServiceTest {
     void withdraw_insufficient_funds_rejected_without_entries() {
         Account account = account(UUID.randomUUID(), AccountStatus.ACTIVE, BigDecimal.valueOf(100));
         when(accountRepository.findById(account.getId())).thenReturn(Optional.of(account));
-        when(accountRepository.findForUpdate(account.getId())).thenReturn(Optional.of(account));
         when(accountRepository.findBySystemCodeAndCurrency(SystemCode.CASH_VAULT, Currency.XOF))
                 .thenReturn(Optional.of(account(UUID.randomUUID(), AccountStatus.ACTIVE, BigDecimal.ZERO)));
         when(accountRepository.findBySystemCodeAndCurrency(SystemCode.FEE_REVENUE, Currency.XOF))

@@ -34,6 +34,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.test.web.servlet.MvcResult;
 
 /**
@@ -435,7 +436,8 @@ class AccountEndpointTest {
     }
 
     @Test
-    @DisplayName("§8/RG-ACC-05 : clôture avec solde non nul → 409 ILLEGAL_STATE_TRANSITION")
+    @Transactional
+    @DisplayName("8/RG-ACC-05 : clôture avec solde non nul → 409 ILLEGAL_STATE_TRANSITION")
     void admin_cannot_close_account_with_nonzero_balance_409() throws Exception {
         String adminToken = adminToken();
         String tellerToken = tellerToken();

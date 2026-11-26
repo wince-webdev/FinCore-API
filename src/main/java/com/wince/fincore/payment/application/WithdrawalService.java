@@ -15,6 +15,7 @@ import com.wince.fincore.shared.domain.Currency;
 import com.wince.fincore.shared.domain.ErrorCode;
 import com.wince.fincore.shared.domain.FinCoreException;
 import com.wince.fincore.shared.domain.Money;
+import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
@@ -52,10 +53,12 @@ public class WithdrawalService {
 
     private final AccountRepository accountRepository;
     private final LedgerService ledgerService;
+    private final EntityManager entityManager;
 
-    public WithdrawalService(AccountRepository accountRepository, LedgerService ledgerService) {
+    public WithdrawalService(AccountRepository accountRepository, LedgerService ledgerService, EntityManager entityManager) {
         this.accountRepository = accountRepository;
         this.ledgerService = ledgerService;
+        this.entityManager = entityManager;
     }
 
     /**
@@ -92,8 +95,9 @@ public class WithdrawalService {
                 .orElseThrow(() -> new FinCoreException(ErrorCode.RESOURCE_NOT_FOUND, "Compte système introuvable."));
         // RG-LED-06 — verrouillage — tri par identifiant croissant — vérification sous-verrou.
         ledgerService.lockAccounts(Set.of(account.getId(), cashVault.getId(), feeRevenue.getId()));
-        account = accountRepository.findForUpdate(account.getId()).orElseThrow(
+        account = accountRepository.findById(account.getId()).orElseThrow(
                 () -> new FinCoreException(ErrorCode.RESOURCE_NOT_FOUND, "Compte introuvable."));
+        entityManager.refresh(account);
         // RG-DEP-02 — insuffisant — vérifié sous verrou — 0 écriture — CA-DEP-02.
         if (account.getBalance().compareTo(amount.amount().add(fee)) < 0) {
             throw new FinCoreException(ErrorCode.INSUFFICIENT_FUNDS,

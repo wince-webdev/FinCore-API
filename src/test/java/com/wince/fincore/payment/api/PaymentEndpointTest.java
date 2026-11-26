@@ -181,6 +181,9 @@ class PaymentEndpointTest {
         String tellerToken = tellerToken();
         Account account = openClientAccount(uniqueEmail());
 
+        Account cashVaultBefore = accountRepository.findBySystemCodeAndCurrency(SystemCode.CASH_VAULT, Currency.XOF).orElseThrow();
+        BigDecimal vaultBalanceBefore = cashVaultBefore.getBalance();
+
         MvcResult result = mockMvc.perform(post("/api/v1/deposits")
                         .header("Authorization", "Bearer " + tellerToken)
                         .contentType(MediaType.APPLICATION_JSON)
@@ -210,10 +213,11 @@ class PaymentEndpointTest {
         System.out.println("DEBUG ca_dep_01 — vault=" + cashVault.getId() + " balance=" + cashVault.getBalance()
                 + " size=" + vaultEntries.size()
                 + " entries=" + vaultEntries.stream().map(e -> e.getId() + "/" + e.getDirection() + "/" + e.getAmount() + "/" + e.getBalanceAfter()).toList());
-        assertThat(vaultEntries).hasSize(1);
-        assertThat(vaultEntries.get(0).getDirection()).isEqualTo(Direction.DEBIT);
-        assertThat(vaultEntries.get(0).getAmount()).isEqualByComparingTo(BigDecimal.valueOf(50000));
-        assertThat(vaultEntries.get(0).getBalanceAfter()).isEqualByComparingTo(BigDecimal.valueOf(-50000));
+        LedgerEntry vaultEntry = vaultEntries.get(vaultEntries.size() - 1);
+        assertThat(vaultEntry.getDirection()).isEqualTo(Direction.DEBIT);
+        assertThat(vaultEntry.getAmount()).isEqualByComparingTo(BigDecimal.valueOf(50000));
+        assertThat(vaultEntry.getBalanceAfter()).isEqualByComparingTo(vaultBalanceBefore.subtract(BigDecimal.valueOf(50000)));
+        assertThat(cashVault.getBalance()).isEqualByComparingTo(vaultBalanceBefore.subtract(BigDecimal.valueOf(50000)));
     }
 
     // ── F-05 — CA-DEP-02 — retrait > solde — 0 écriture ───────────────────
@@ -313,7 +317,19 @@ class PaymentEndpointTest {
         assertThatThrownBy(() -> entityManager.createNativeQuery(
                         "UPDATE ledger_entry SET balance_after = 999 WHERE id = " + entry.getId()).executeUpdate())
                 .hasMessageContaining("RG-LED-03");
-        // RG-LED-03 — DELETE direct → exception explicite — trigger.
+    }
+
+    @Test
+    @Transactional
+    @DisplayName("CA-LED-02 : DELETE direct sur ledger_entry (SQL) → exception du declencheur")
+    void direct_sql_delete_on_ledger_entry_fails_rg_led_03() throws Exception {
+        Account account = openClientAccount(uniqueEmail());
+        depositService.deposit(new DepositCommand(account.getId(), BigDecimal.valueOf(100000), null), tellerAppUserId());
+
+        List<LedgerEntry> entries = ledgerEntryRepository.findByAccountIdOrderById(account.getId());
+        assertThat(entries).hasSize(1);
+        LedgerEntry entry = entries.get(0);
+
         assertThatThrownBy(() -> entityManager.createNativeQuery(
                         "DELETE FROM ledger_entry WHERE id = " + entry.getId()).executeUpdate())
                 .hasMessageContaining("RG-LED-03");
@@ -322,7 +338,8 @@ class PaymentEndpointTest {
     // ── F-04 — CA-LED-03 — préservation — GET /api/v1/admin/ledger/verify ─
 
     @Test
-    @DisplayName("CA-LED-03 : verify() ok=true — ADMIN + AUDITOR → 200 — et tamper détecté (INSERT) — ok=false")
+    @Transactional
+    @DisplayName("CA-LED-03 : verify() ok=true — ADMIN + AUDITOR → 200 — et tamper détecté (INSERT) → ok=false")
     void verify_ok_and_tamper_detected_ca_led_03() throws Exception {
         Account account = openClientAccount(uniqueEmail());
         depositService.deposit(new DepositCommand(account.getId(), BigDecimal.valueOf(50000), null), tellerAppUserId());
@@ -342,7 +359,7 @@ class PaymentEndpointTest {
 
         // Tamper — INSERT d'une écriture altérée — simulate (UPDATE bloqué par le trigger — RG-LED-03).
         LedgerEntry realEntry = ledgerEntryRepository.findByAccountIdOrderById(account.getId()).get(0);
-        LedgerEntry tampered = new LedgerEntry(UUID.randomUUID(), account.getId(), Direction.CREDIT,
+        LedgerEntry tampered = new LedgerEntry(realEntry.getTransactionId(), account.getId(), Direction.CREDIT,
                 BigDecimal.valueOf(100), Currency.XOF, BigDecimal.valueOf(100),
                 realEntry.getEntryHash(), "0".repeat(64));
         tampered.setCreatedAt(Instant.now());
