@@ -186,6 +186,7 @@ class PaymentEndpointTest {
 
         MvcResult result = mockMvc.perform(post("/api/v1/deposits")
                         .header("Authorization", "Bearer " + tellerToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"accountId\":\"" + account.getId() + "\",\"amount\":50000,\"description\":\"Dépôt initial\"}"))
                 .andExpect(status().isCreated())
@@ -231,6 +232,7 @@ class PaymentEndpointTest {
         // Solde 0 — retrait impossible — CA-DEP-02.
         mockMvc.perform(post("/api/v1/withdrawals")
                         .header("Authorization", "Bearer " + tellerToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"accountId\":\"" + account.getId() + "\",\"amount\":100}"))
                 .andExpect(status().isUnprocessableEntity())
@@ -251,6 +253,7 @@ class PaymentEndpointTest {
 
         mockMvc.perform(post("/api/v1/deposits")
                         .header("Authorization", "Bearer " + tellerToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"accountId\":\"" + account.getId() + "\",\"amount\":1.50}"))
                 .andExpect(status().isBadRequest())
@@ -268,6 +271,7 @@ class PaymentEndpointTest {
 
         mockMvc.perform(post("/api/v1/deposits")
                         .header("Authorization", "Bearer " + tellerToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"accountId\":\"" + account.getId() + "\",\"amount\":100}"))
                 .andExpect(status().isConflict())
@@ -295,6 +299,7 @@ class PaymentEndpointTest {
         // TELLER → 201.
         mockMvc.perform(post("/api/v1/deposits")
                         .header("Authorization", "Bearer " + tellerToken)
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"accountId\":\"" + account.getId() + "\",\"amount\":100}"))
                 .andExpect(status().isCreated());

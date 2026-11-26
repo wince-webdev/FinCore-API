@@ -49,12 +49,20 @@ class WithdrawalServiceTest {
     private LedgerService ledgerService;
     @Mock
     private EntityManager entityManager;
+    @Mock
+    private com.wince.fincore.payment.application.FeeService feeService;
+    @Mock
+    private com.wince.fincore.payment.application.LimitService limitService;
 
     private WithdrawalService service;
 
     @BeforeEach
     void setUp() {
-        service = new WithdrawalService(accountRepository, ledgerService, entityManager);
+        org.mockito.Mockito.lenient().when(feeService.calculate(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(com.wince.fincore.shared.domain.Currency.class),
+                org.mockito.ArgumentMatchers.any(java.math.BigDecimal.class)))
+                .thenReturn(java.math.BigDecimal.valueOf(100));
+        service = new WithdrawalService(accountRepository, ledgerService, entityManager, feeService, limitService);
     }
 
     private static Account account(UUID id, AccountStatus status, BigDecimal balance) {

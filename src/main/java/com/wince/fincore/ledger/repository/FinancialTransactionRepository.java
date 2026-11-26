@@ -1,9 +1,14 @@
 package com.wince.fincore.ledger.repository;
 
 import com.wince.fincore.ledger.domain.FinancialTransaction;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 /**
  * Dépôt JPA de {@link FinancialTransaction} — Phase 5, F-04.
@@ -14,6 +19,15 @@ import org.springframework.data.jpa.repository.JpaRepository;
  */
 public interface FinancialTransactionRepository extends JpaRepository<FinancialTransaction, UUID> {
 
-    /** Transaction par numéro externe — UNIQUE (§6.1). */
+    /** Transaction par numǸro externe �?" UNIQUE (��6.1). */
     Optional<FinancialTransaction> findByReference(String reference);
+
+    /** Transactions dont l'origine est la transaction donnǸe (contre-passation). */
+    List<FinancialTransaction> findByReversalOf(UUID reversalOf);
+
+    /** Somme des montants sortants d'un compte depuis une date (plafond journalier). */
+    @Query("SELECT COALESCE(SUM(t.amount), 0) FROM FinancialTransaction t " +
+           "WHERE t.sourceAccountId = :accountId AND t.status IN ('COMPLETED','PENDING') " +
+           "AND t.createdAt >= :from")
+    BigDecimal sumOutgoingSince(@Param("accountId") UUID accountId, @Param("from") Instant from);
 }

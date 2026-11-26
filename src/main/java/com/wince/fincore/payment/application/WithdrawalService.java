@@ -11,6 +11,8 @@ import com.wince.fincore.ledger.domain.Direction;
 import com.wince.fincore.ledger.domain.FinancialTransaction;
 import com.wince.fincore.ledger.domain.TransactionType;
 import com.wince.fincore.payment.api.WithdrawalCommand;
+import com.wince.fincore.payment.application.FeeService;
+import com.wince.fincore.payment.application.LimitService;
 import com.wince.fincore.shared.domain.Currency;
 import com.wince.fincore.shared.domain.ErrorCode;
 import com.wince.fincore.shared.domain.FinCoreException;
@@ -54,11 +56,16 @@ public class WithdrawalService {
     private final AccountRepository accountRepository;
     private final LedgerService ledgerService;
     private final EntityManager entityManager;
+    private final FeeService feeService;
+    private final LimitService limitService;
 
-    public WithdrawalService(AccountRepository accountRepository, LedgerService ledgerService, EntityManager entityManager) {
+    public WithdrawalService(AccountRepository accountRepository, LedgerService ledgerService, EntityManager entityManager,
+                            FeeService feeService, LimitService limitService) {
         this.accountRepository = accountRepository;
         this.ledgerService = ledgerService;
         this.entityManager = entityManager;
+        this.feeService = feeService;
+        this.limitService = limitService;
     }
 
     /**
@@ -87,7 +94,8 @@ public class WithdrawalService {
             throw new FinCoreException(ErrorCode.ACCOUNT_NOT_ACTIVE,
                     "Le compte est " + account.getStatus() + " (RG-DEP-04) — le retrait est impossible.");
         }
-        BigDecimal fee = withdrawalFee(amount, account.getCurrency());
+        limitService.checkWithdrawal(account, amount.amount());
+        BigDecimal fee = feeService.calculate("WITHDRAWAL", account.getCurrency(), amount.amount());
         // Comptes systèmes — seed — RG-ACC-06 — Phase 4.
         Account cashVault = accountRepository.findBySystemCodeAndCurrency(SystemCode.CASH_VAULT, account.getCurrency())
                 .orElseThrow(() -> new FinCoreException(ErrorCode.RESOURCE_NOT_FOUND, "Compte système introuvable."));

@@ -30,6 +30,7 @@ public enum ErrorCode {
     REQUEST_IN_PROGRESS(409, "Requête en cours de traitement", "request-in-progress"),
     ILLEGAL_STATE_TRANSITION(409, "Transition d'état illégale", "illegal-state-transition"),
     ACCOUNT_NOT_ACTIVE(409, "Compte non actif", "account-not-active"),
+    REVERSAL_IMPOSSIBLE_INSUFFICIENT_FUNDS(409, "Contre-passation impossible : fonds insuffisants", "reversal-impossible-insufficient-funds"),
 
     // ── 422 ──────────────────────────────────────────────────────────────
     INSUFFICIENT_FUNDS(422, "Solde insuffisant", "insufficient-funds"),

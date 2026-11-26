@@ -212,4 +212,8 @@ public class FinancialTransaction {
     public void setCompletedAt(Instant completedAt) {
         this.completedAt = completedAt;
     }
+
+    public void setReversalOf(UUID reversalOf) {
+        this.reversalOf = reversalOf;
+    }
 }
