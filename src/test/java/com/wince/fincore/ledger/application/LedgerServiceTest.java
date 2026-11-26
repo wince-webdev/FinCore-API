@@ -3,9 +3,11 @@ package com.wince.fincore.ledger.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 import com.wince.fincore.account.domain.Account;
@@ -20,6 +22,8 @@ import com.wince.fincore.ledger.domain.TransactionType;
 import com.wince.fincore.ledger.repository.FinancialTransactionRepository;
 import com.wince.fincore.ledger.repository.LedgerEntryRepository;
 import com.wince.fincore.shared.domain.Currency;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.Query;
 import com.wince.fincore.shared.domain.ErrorCode;
 import com.wince.fincore.shared.domain.FinCoreException;
 import com.wince.fincore.shared.domain.Money;
@@ -55,13 +59,20 @@ class LedgerServiceTest {
     private AccountRepository accountRepository;
     @Mock
     private FinancialTransactionRepository financialTransactionRepository;
+    @Mock
+    private EntityManager entityManager;
+    @Mock
+    private Query nativeQuery;
 
     private LedgerService service;
 
     @BeforeEach
     void setUp() {
+        lenient().when(entityManager.createNativeQuery(anyString())).thenReturn(nativeQuery);
+        lenient().when(nativeQuery.setParameter(anyString(), any())).thenReturn(nativeQuery);
+        lenient().when(nativeQuery.getSingleResult()).thenReturn(1);
         service = new LedgerService(ledgerEntryRepository, accountRepository, financialTransactionRepository,
-                Clock.fixed(CREATED_AT, ClockConfig.BANKING_ZONE));
+                Clock.fixed(CREATED_AT, ClockConfig.BANKING_ZONE), entityManager);
     }
 
     private static Account account(UUID id, BigDecimal balance) {
@@ -75,8 +86,8 @@ class LedgerServiceTest {
     void apply_posts_entries_and_updates_balances() {
         Account account = account(UUID.randomUUID(), BigDecimal.ZERO);
         Account cashVault = account(UUID.randomUUID(), BigDecimal.ZERO);
-        when(accountRepository.findForUpdate(account.getId())).thenReturn(Optional.of(account));
-        when(accountRepository.findForUpdate(cashVault.getId())).thenReturn(Optional.of(cashVault));
+        when(accountRepository.findById(account.getId())).thenReturn(Optional.of(account));
+        when(accountRepository.findById(cashVault.getId())).thenReturn(Optional.of(cashVault));
         when(ledgerEntryRepository.findTop1ByAccountIdOrderByIdDesc(account.getId())).thenReturn(Optional.empty());
         when(ledgerEntryRepository.findTop1ByAccountIdOrderByIdDesc(cashVault.getId())).thenReturn(Optional.empty());
         FinancialTransaction transaction = new FinancialTransaction(UUID.randomUUID(), "TXN-20261130-000001",

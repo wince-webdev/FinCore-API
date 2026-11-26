@@ -11,10 +11,13 @@ import com.wince.fincore.ledger.domain.Direction;
 import com.wince.fincore.ledger.domain.FinancialTransaction;
 import com.wince.fincore.ledger.domain.TransactionType;
 import com.wince.fincore.payment.api.WithdrawalCommand;
+import com.wince.fincore.payment.application.FeeService;
+import com.wince.fincore.payment.application.LimitService;
 import com.wince.fincore.shared.domain.Currency;
 import com.wince.fincore.shared.domain.ErrorCode;
 import com.wince.fincore.shared.domain.FinCoreException;
 import com.wince.fincore.shared.domain.Money;
+import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
@@ -52,10 +55,17 @@ public class WithdrawalService {
 
     private final AccountRepository accountRepository;
     private final LedgerService ledgerService;
+    private final EntityManager entityManager;
+    private final FeeService feeService;
+    private final LimitService limitService;
 
-    public WithdrawalService(AccountRepository accountRepository, LedgerService ledgerService) {
+    public WithdrawalService(AccountRepository accountRepository, LedgerService ledgerService, EntityManager entityManager,
+                            FeeService feeService, LimitService limitService) {
         this.accountRepository = accountRepository;
         this.ledgerService = ledgerService;
+        this.entityManager = entityManager;
+        this.feeService = feeService;
+        this.limitService = limitService;
     }
 
     /**
@@ -84,7 +94,8 @@ public class WithdrawalService {
             throw new FinCoreException(ErrorCode.ACCOUNT_NOT_ACTIVE,
                     "Le compte est " + account.getStatus() + " (RG-DEP-04) — le retrait est impossible.");
         }
-        BigDecimal fee = withdrawalFee(amount, account.getCurrency());
+        limitService.checkWithdrawal(account, amount.amount());
+        BigDecimal fee = feeService.calculate("WITHDRAWAL", account.getCurrency(), amount.amount());
         // Comptes systèmes — seed — RG-ACC-06 — Phase 4.
         Account cashVault = accountRepository.findBySystemCodeAndCurrency(SystemCode.CASH_VAULT, account.getCurrency())
                 .orElseThrow(() -> new FinCoreException(ErrorCode.RESOURCE_NOT_FOUND, "Compte système introuvable."));
@@ -92,8 +103,9 @@ public class WithdrawalService {
                 .orElseThrow(() -> new FinCoreException(ErrorCode.RESOURCE_NOT_FOUND, "Compte système introuvable."));
         // RG-LED-06 — verrouillage — tri par identifiant croissant — vérification sous-verrou.
         ledgerService.lockAccounts(Set.of(account.getId(), cashVault.getId(), feeRevenue.getId()));
-        account = accountRepository.findForUpdate(account.getId()).orElseThrow(
+        account = accountRepository.findById(account.getId()).orElseThrow(
                 () -> new FinCoreException(ErrorCode.RESOURCE_NOT_FOUND, "Compte introuvable."));
+        entityManager.refresh(account);
         // RG-DEP-02 — insuffisant — vérifié sous verrou — 0 écriture — CA-DEP-02.
         if (account.getBalance().compareTo(amount.amount().add(fee)) < 0) {
             throw new FinCoreException(ErrorCode.INSUFFICIENT_FUNDS,
