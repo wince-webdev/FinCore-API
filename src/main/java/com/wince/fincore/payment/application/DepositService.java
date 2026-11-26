@@ -12,6 +12,7 @@ import com.wince.fincore.ledger.domain.FinancialTransaction;
 import com.wince.fincore.ledger.domain.TransactionType;
 import com.wince.fincore.ledger.repository.FinancialTransactionRepository;
 import com.wince.fincore.payment.api.DepositCommand;
+import com.wince.fincore.payment.application.LimitService;
 import com.wince.fincore.shared.domain.ErrorCode;
 import com.wince.fincore.shared.domain.FinCoreException;
 import com.wince.fincore.shared.domain.Money;
@@ -36,12 +37,15 @@ public class DepositService {
     private final AccountRepository accountRepository;
     private final LedgerService ledgerService;
     private final FinancialTransactionRepository financialTransactionRepository;
+    private final LimitService limitService;
 
     public DepositService(AccountRepository accountRepository, LedgerService ledgerService,
-                          FinancialTransactionRepository financialTransactionRepository) {
+                          FinancialTransactionRepository financialTransactionRepository,
+                          LimitService limitService) {
         this.accountRepository = accountRepository;
         this.ledgerService = ledgerService;
         this.financialTransactionRepository = financialTransactionRepository;
+        this.limitService = limitService;
     }
 
     /**
@@ -64,7 +68,10 @@ public class DepositService {
         // RG-DEP-04 — compte FROZEN ou CLOSED → ACCOUNT_NOT_ACTIVE.
         if (account.getStatus() != AccountStatus.ACTIVE) {
             throw new FinCoreException(ErrorCode.ACCOUNT_NOT_ACTIVE,
-                    "Le compte est " + account.getStatus() + " (RG-DEP-04) — le dépôt est impossible.");
+                    "Le compte est " + account.getStatus() + " (RG-DEP-04) - depot impossible.");
+        }
+        if (limitService != null) {
+            limitService.checkDeposit(account, amount.amount());
         }
         // Compte système — seed en migration — RG-ACC-06 — Phase 4.
         Account cashVault = accountRepository.findBySystemCodeAndCurrency(SystemCode.CASH_VAULT, account.getCurrency())

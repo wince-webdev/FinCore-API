@@ -16,6 +16,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -26,6 +27,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.HexFormat;
+import jakarta.persistence.EntityManager;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -70,15 +72,18 @@ public class LedgerService {
     private final AccountRepository accountRepository;
     private final FinancialTransactionRepository financialTransactionRepository;
     private final Clock clock;
+    private final EntityManager entityManager;
 
     public LedgerService(LedgerEntryRepository ledgerEntryRepository,
                          AccountRepository accountRepository,
                          FinancialTransactionRepository financialTransactionRepository,
-                         Clock clock) {
+                         Clock clock,
+                         EntityManager entityManager) {
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.accountRepository = accountRepository;
         this.financialTransactionRepository = financialTransactionRepository;
         this.clock = clock;
+        this.entityManager = entityManager;
     }
 
     // ── F-04 — RG-LED-01 à 07 — apply — l'orchestration du grand livre ──
@@ -118,8 +123,10 @@ public class LedgerService {
         lockAccounts(accountIds);
         Map<UUID, Account> accounts = new LinkedHashMap<>();
         for (UUID id : accountIds) {
-            accounts.put(id, accountRepository.findForUpdate(id).orElseThrow(
-                    () -> new FinCoreException(ErrorCode.RESOURCE_NOT_FOUND, "Compte introuvable.")));
+            Account acc = accountRepository.findById(id).orElseThrow(
+                    () -> new FinCoreException(ErrorCode.RESOURCE_NOT_FOUND, "Compte introuvable."));
+            entityManager.refresh(acc);
+            accounts.put(id, acc);
         }
 
         // RG-LED-07 : solde courant par compte — MAJ dans la même transaction.
@@ -135,7 +142,7 @@ public class LedgerService {
         financialTransactionRepository.save(transaction);
 
         // Chaînage de hachages — entry_hash, balance_after — RG-LED-04/05.
-        Instant createdAt = clock.instant();
+        Instant createdAt = clock.instant().truncatedTo(ChronoUnit.MICROS);
         for (LedgerMovement movement : movements) {
             Account account = accounts.get(movement.accountId());
             BigDecimal net = movement.direction() == Direction.DEBIT
@@ -167,8 +174,13 @@ public class LedgerService {
      */
     public void lockAccounts(Collection<UUID> accountIds) {
         for (UUID id : accountIds.stream().sorted().toList()) {
-            accountRepository.findForUpdate(id).orElseThrow(
-                    () -> new FinCoreException(ErrorCode.RESOURCE_NOT_FOUND, "Compte introuvable."));
+            try {
+                entityManager.createNativeQuery("SELECT 1 FROM account WHERE id = :id FOR UPDATE")
+                        .setParameter("id", id)
+                        .getSingleResult();
+            } catch (jakarta.persistence.NoResultException e) {
+                throw new FinCoreException(ErrorCode.RESOURCE_NOT_FOUND, "Compte introuvable.");
+            }
         }
     }
 

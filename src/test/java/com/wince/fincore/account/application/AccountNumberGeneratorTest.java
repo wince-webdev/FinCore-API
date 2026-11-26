@@ -60,9 +60,9 @@ class AccountNumberGeneratorTest {
         assertThat(AccountNumberGenerator.isValid("BJ1234567890123")).isFalse(); // 15 car.
 
         String generated = AccountNumberGenerator.generate();
-        // Clé "00" — impossible par construction (clé ∈ 1..97).
-        assertThat(AccountNumberGenerator.isValid(generated.substring(0, 13) + "0")).isFalse();
-        // Tronqué.
+        // ClǸ "00" �?" impossible par construction (clǸ �^^ 1..97).
+        assertThat(AccountNumberGenerator.isValid(generated.substring(0, 12) + "00")).isFalse();
+        // TronquǸ.
         assertThat(AccountNumberGenerator.isValid(generated.substring(0, 12))).isFalse();
     }
 

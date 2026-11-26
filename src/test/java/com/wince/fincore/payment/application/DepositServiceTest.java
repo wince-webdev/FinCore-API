@@ -50,7 +50,7 @@ class DepositServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new DepositService(accountRepository, ledgerService, financialTransactionRepository);
+        service = new DepositService(accountRepository, ledgerService, financialTransactionRepository, null);
     }
 
     private static Account account(UUID id, AccountStatus status) {

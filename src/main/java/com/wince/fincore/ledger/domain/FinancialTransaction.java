@@ -139,6 +139,15 @@ public class FinancialTransaction {
     @Column(name = "completed_at")
     private Instant completedAt;
 
+    @Column(name = "destination_amount", precision = 19, scale = 4)
+    private BigDecimal destinationAmount;
+
+    @Column(name = "exchange_rate", precision = 19, scale = 8)
+    private BigDecimal exchangeRate;
+
+    @Column(name = "spread_percent", precision = 19, scale = 4)
+    private BigDecimal spreadPercent;
+
     // ── Accesseurs ────────────────────────────────────────────────────────
 
     public UUID getId() {
@@ -212,4 +221,15 @@ public class FinancialTransaction {
     public void setCompletedAt(Instant completedAt) {
         this.completedAt = completedAt;
     }
+
+    public void setReversalOf(UUID reversalOf) {
+        this.reversalOf = reversalOf;
+    }
+
+    public BigDecimal getDestinationAmount() { return destinationAmount; }
+    public BigDecimal getExchangeRate() { return exchangeRate; }
+    public BigDecimal getSpreadPercent() { return spreadPercent; }
+    public void setDestinationAmount(BigDecimal v) { this.destinationAmount = v; }
+    public void setExchangeRate(BigDecimal v) { this.exchangeRate = v; }
+    public void setSpreadPercent(BigDecimal v) { this.spreadPercent = v; }
 }
