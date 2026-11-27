@@ -1155,3 +1155,37 @@ GET /api/v1/compliance/alerts, PATCH /{id}
 
 ## 10.8 Exercice
 Ajouter un seuil configurable pour AML-001 via properties.
+# PHASE 11 - Interets d epargne, metriques, ArchUnit - FAIT (partiel)
+
+## 11.1 Objectif
+Job mensuel d interets sur comptes SAVINGS, metriques Micrometer, idempotence du job.
+
+## 11.2 Notions
+- @Scheduled(cron) + zone.
+- MeterRegistry pour metriques.
+- Idempotence via table interest_run.
+
+## 11.3 Commandes
+./mvnw verify
+
+## 11.4 Fichiers
+- V10__phase11_interest.sql
+- InterestRun, InterestRunRepository, InterestService
+
+## 11.5 Pieges
+- initiated_by doit etre nullable pour les jobs systeme.
+
+# PHASE 12 - Docker, CI, documentation - FAIT (partiel)
+
+## 12.1 Objectif
+Dockerfile multi-etapes, CI GitHub Actions, README, docs.
+
+## 12.2 Commandes
+docker compose up --build
+
+## 12.3 Fichiers
+- Dockerfile, .dockerignore, .github/workflows/ci.yml
+- README.md, docs/*
+
+## 12.4 Verification
+docker compose up --build ; ./mvnw verify

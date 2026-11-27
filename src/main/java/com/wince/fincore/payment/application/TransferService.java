@@ -35,10 +35,12 @@ public class TransferService {
     private final FeeService feeService;
     private final LimitService limitService;
     private final EntityManager entityManager;
+    private final io.micrometer.core.instrument.MeterRegistry meterRegistry;
 
     public TransferService(AccountRepository accountRepository, CustomerRepository customerRepository,
                           LedgerService ledgerService, FinancialTransactionRepository transactionRepository,
-                          FeeService feeService, LimitService limitService, EntityManager entityManager) {
+                          FeeService feeService, LimitService limitService, EntityManager entityManager,
+                          io.micrometer.core.instrument.MeterRegistry meterRegistry) {
         this.accountRepository = accountRepository;
         this.customerRepository = customerRepository;
         this.ledgerService = ledgerService;
@@ -46,6 +48,7 @@ public class TransferService {
         this.feeService = feeService;
         this.limitService = limitService;
         this.entityManager = entityManager;
+        this.meterRegistry = meterRegistry;
     }
 
     @Transactional
@@ -126,6 +129,7 @@ public class TransferService {
 
         BigDecimal sourceBalanceAfter = source.getBalance().subtract(totalDebited);
         BigDecimal destinationBalanceAfter = destination.getBalance().add(amount);
+        meterRegistry.counter("fincore.transactions.count", "type", "TRANSFER", "status", "COMPLETED").increment();
         return new TransferResult(transaction, sourceBalanceAfter, destinationBalanceAfter, fee, totalDebited, null);
     }
 
