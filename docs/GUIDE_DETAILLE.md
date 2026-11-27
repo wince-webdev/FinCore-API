@@ -1095,3 +1095,33 @@ Virements vers un operateur externe (mobile money/banque) en asynchrone : creati
 
 ## 8.8 Exercice
 Ajouter un mode `success` et verifier qu un virement externe passe en COMPLETED avec EXTERNAL_SETTLEMENT credite.
+# PHASE 9 - Releves JSON/CSV/PDF + rapports et reconciliation - FAIT
+
+## 9.1 Objectif
+Releves pagines, export CSV (BOM) et PDF (OpenPDF) avec empreinte SHA-256, rapports admin (balance de verification, synthese journaliere, reconciliation).
+
+## 9.2 Notions
+- OpenPDF : generation PDF cote serveur (table PdfPTable).
+- Pagination Spring Data : Pageable + Page.
+- Reconciliation : recalculer le solde depuis le grand livre et comparer a account.balance.
+
+## 9.3 Commandes
+./mvnw verify
+
+## 9.4 Fichiers
+- V? (pas de migration nouvelle, OpenPDF ajoute dans pom)
+- StatementService, StatementController, PdfStatementGenerator
+- AdminReportController
+
+## 9.5 Verification
+GET /api/v1/accounts/{id}/statement, .csv, .pdf ; POST /api/v1/admin/reconciliation (vide).
+
+## 9.6 Pieges
+- CustomerRepository est dans customer.repository, pas account.repository.
+- BigDecimal n a pas l operateur + : utiliser toPlainString/add.
+
+## 9.7 Questions
+1. Comment eviter le N+1 sur 10k lignes ? Charger les transactions par batch (findAllById).
+
+## 9.8 Exercice
+Ajouter un filtre par type de mouvement dans le releve.

@@ -226,6 +226,10 @@ public class FinancialTransaction {
         this.reversalOf = reversalOf;
     }
 
+    public void setFailureReason(String failureReason) {
+        this.failureReason = failureReason;
+    }
+
     public BigDecimal getDestinationAmount() { return destinationAmount; }
     public BigDecimal getExchangeRate() { return exchangeRate; }
     public BigDecimal getSpreadPercent() { return spreadPercent; }
