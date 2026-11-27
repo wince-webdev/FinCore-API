@@ -1,6 +1,8 @@
 package com.wince.fincore.ledger.repository;
 
 import com.wince.fincore.ledger.domain.FinancialTransaction;
+import com.wince.fincore.ledger.domain.TransactionStatus;
+import com.wince.fincore.ledger.domain.TransactionType;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -24,6 +26,9 @@ public interface FinancialTransactionRepository extends JpaRepository<FinancialT
 
     /** Transactions dont l'origine est la transaction donnǸe (contre-passation). */
     List<FinancialTransaction> findByReversalOf(UUID reversalOf);
+
+    /** Transactions par type et statut. */
+    List<FinancialTransaction> findByTypeAndStatus(TransactionType type, TransactionStatus status);
 
     /** Somme des montants sortants d'un compte depuis une date (plafond journalier). */
     @Query("SELECT COALESCE(SUM(t.amount), 0) FROM FinancialTransaction t " +
