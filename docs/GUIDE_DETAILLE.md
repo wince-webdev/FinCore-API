@@ -1125,3 +1125,33 @@ GET /api/v1/accounts/{id}/statement, .csv, .pdf ; POST /api/v1/admin/reconciliat
 
 ## 9.8 Exercice
 Ajouter un filtre par type de mouvement dans le releve.
+# PHASE 10 - Alertes AML - FAIT
+
+## 10.1 Objectif
+Detection asynchrone post-commit de transactions suspectes, creation d alertes, endpoints de consultation/traitement.
+
+## 10.2 Notions
+- @TransactionalEventListener(AFTER_COMMIT) + @Async : evaluation apres commit sans bloquer la transaction.
+- @EnableAsync pour activer l asynchrone.
+- Regles AML-001..004.
+
+## 10.3 Commandes
+./mvnw verify
+
+## 10.4 Fichiers
+- V9__phase10_aml.sql
+- AmlAlert, AmlAlertRepository, AmlService, AmlTransactionListener
+- ComplianceController
+
+## 10.5 Verification
+GET /api/v1/compliance/alerts, PATCH /{id}
+
+## 10.6 Pieges
+- LedgerService necessite ApplicationEventPublisher (injecte par Spring).
+- AmlService evaluate doit etre transactionnel pour sauver alertes.
+
+## 10.7 Questions
+1. Pourquoi AFTER_COMMIT et non pendant la transaction ? Pour ne pas bloquer/annuler l operation si la detection echoue.
+
+## 10.8 Exercice
+Ajouter un seuil configurable pour AML-001 via properties.
