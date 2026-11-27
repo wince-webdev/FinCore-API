@@ -72,7 +72,7 @@ class LedgerServiceTest {
         lenient().when(nativeQuery.setParameter(anyString(), any())).thenReturn(nativeQuery);
         lenient().when(nativeQuery.getSingleResult()).thenReturn(1);
         service = new LedgerService(ledgerEntryRepository, accountRepository, financialTransactionRepository,
-                Clock.fixed(CREATED_AT, ClockConfig.BANKING_ZONE), entityManager);
+                Clock.fixed(CREATED_AT, ClockConfig.BANKING_ZONE), entityManager, null);
     }
 
     private static Account account(UUID id, BigDecimal balance) {

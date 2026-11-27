@@ -73,17 +73,20 @@ public class LedgerService {
     private final FinancialTransactionRepository financialTransactionRepository;
     private final Clock clock;
     private final EntityManager entityManager;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     public LedgerService(LedgerEntryRepository ledgerEntryRepository,
                          AccountRepository accountRepository,
                          FinancialTransactionRepository financialTransactionRepository,
                          Clock clock,
-                         EntityManager entityManager) {
+                         EntityManager entityManager,
+                         org.springframework.context.ApplicationEventPublisher eventPublisher) {
         this.ledgerEntryRepository = ledgerEntryRepository;
         this.accountRepository = accountRepository;
         this.financialTransactionRepository = financialTransactionRepository;
         this.clock = clock;
         this.entityManager = entityManager;
+        this.eventPublisher = eventPublisher;
     }
 
     // ── F-04 — RG-LED-01 à 07 — apply — l'orchestration du grand livre ──
@@ -161,6 +164,9 @@ public class LedgerService {
             lastHashes.put(movement.accountId(), entryHash);
         }
         transaction.setCompletedAt(createdAt);
+        if (eventPublisher != null) {
+            eventPublisher.publishEvent(new TransactionCompletedEvent(transaction.getId()));
+        }
         return transaction;
     }
 
